@@ -42,6 +42,7 @@ type Job struct {
 type Result struct {
 	OutputPath string
 	WorkDir    string
+	LogPath    string
 }
 
 type overlap struct {
@@ -71,7 +72,7 @@ func Run(ctx context.Context, job Job) (Result, error) {
 	}
 
 	workDir := job.WorkDir
-	var cleanup bool
+	userWorkDir := workDir != ""
 	if workDir == "" {
 		tmpRoot := filepath.Join(".", "nvrclip_temp")
 		if err := os.MkdirAll(tmpRoot, 0o755); err != nil {
@@ -82,26 +83,43 @@ func Run(ctx context.Context, job Job) (Result, error) {
 			return Result{}, err
 		}
 		workDir = tmp
-		cleanup = !job.KeepTemp && !job.DownloadOnly
 	} else if err := os.MkdirAll(workDir, 0o755); err != nil {
 		return Result{}, err
 	}
-	if cleanup {
-		defer os.RemoveAll(workDir)
+	logger, err := newLogger(filepath.Join(workDir, "nvrclip.log"))
+	if err != nil {
+		return Result{WorkDir: workDir}, err
+	}
+	defer logger.Close()
+	log := logger.Printf
+	log("start alias=%q channel=%d from=%s to=%s output_dir=%q work_dir=%q mode=%s download_only=%t keep_temp=%t",
+		job.Alias, job.Channel, humanTime(job.From), humanTime(job.To), job.OutputDir, workDir, job.Mode, job.DownloadOnly, job.KeepTemp)
+	if job.Stdout != nil {
+		fmt.Fprintf(job.Stdout, "log %s\n", logger.Path)
 	}
 
+	log("search start")
 	segments, err := job.Adapter.Search(ctx, job.Channel, job.From, job.To)
 	if err != nil {
-		return Result{}, err
+		log("search error: %v", err)
+		return Result{WorkDir: workDir, LogPath: logger.Path}, err
+	}
+	log("search done segments=%d", len(segments))
+	for i, seg := range segments {
+		log("segment %d channel=%d start=%s end=%s type=%q stream=%q path=%q", i, seg.Channel, humanTime(seg.Start), humanTime(seg.End), seg.Type, seg.Stream, seg.FilePath)
 	}
 	overlaps := overlappingSegments(segments, job.From, job.To)
 	if len(overlaps) == 0 {
-		return Result{}, fmt.Errorf("no recordings overlap %s to %s on channel %d", humanTime(job.From), humanTime(job.To), job.Channel)
+		err := fmt.Errorf("no recordings overlap %s to %s on channel %d", humanTime(job.From), humanTime(job.To), job.Channel)
+		log("overlap error: %v", err)
+		return Result{WorkDir: workDir, LogPath: logger.Path}, err
 	}
+	log("overlaps=%d", len(overlaps))
 
 	trimmedParts := make([]string, 0, len(overlaps))
 	for i, ov := range overlaps {
 		rawPart := filepath.Join(workDir, fmt.Sprintf("part_%03d.src", i))
+		log("part %d/%d download start overlap=%s raw=%q segment_start=%s segment_end=%s", i+1, len(overlaps), humanRange(ov.From, ov.To), rawPart, humanTime(ov.Segment.Start), humanTime(ov.Segment.End))
 		progress := newPartProgress(job.Stdout, i+1, len(overlaps), ov.From, ov.To)
 		progress.Start()
 		download, err := job.Adapter.Download(ctx, nvr.DownloadRequest{
@@ -111,19 +129,25 @@ func Run(ctx context.Context, job Job) (Result, error) {
 			Path:     rawPart,
 			Segment:  ov.Segment,
 			Progress: progress.Update,
+			Logf:     log,
 		})
 		if err != nil {
 			progress.Done(0)
-			return Result{WorkDir: workDir}, err
+			log("part %d/%d download error: %v", i+1, len(overlaps), err)
+			return Result{WorkDir: workDir, LogPath: logger.Path}, err
 		}
 		info, err := os.Stat(rawPart)
 		if err != nil {
 			progress.Done(0)
-			return Result{WorkDir: workDir}, err
+			log("part %d/%d stat error: %v", i+1, len(overlaps), err)
+			return Result{WorkDir: workDir, LogPath: logger.Path}, err
 		}
 		progress.Done(info.Size())
+		log("part %d/%d download done size=%d download_from=%s download_to=%s force_fps=%t", i+1, len(overlaps), info.Size(), humanTime(download.From), humanTime(download.To), download.ForceFrameRate)
 		if info.Size() == 0 {
-			return Result{WorkDir: workDir}, fmt.Errorf("downloaded empty part for %s", humanRange(ov.From, ov.To))
+			err := fmt.Errorf("downloaded empty part for %s", humanRange(ov.From, ov.To))
+			log("part %d/%d empty error: %v", i+1, len(overlaps), err)
+			return Result{WorkDir: workDir, LogPath: logger.Path}, err
 		}
 		if job.DownloadOnly {
 			continue
@@ -135,27 +159,44 @@ func Run(ctx context.Context, job Job) (Result, error) {
 			offset = 0
 		}
 		duration := ov.To.Sub(ov.From)
+		log("part %d/%d trim start raw=%q trimmed=%q offset=%s duration=%s", i+1, len(overlaps), rawPart, trimmedPart, offset, duration)
 		if err := renderPartMP4(ctx, rawPart, trimmedPart, renderOptions{
 			Offset:         offset,
 			Duration:       duration,
 			FrameRate:      job.FrameRate,
 			Mode:           job.Mode,
 			ForceFrameRate: download.ForceFrameRate,
+			Logf:           log,
 		}); err != nil {
-			return Result{WorkDir: workDir}, err
+			log("part %d/%d trim error: %v", i+1, len(overlaps), err)
+			return Result{WorkDir: workDir, LogPath: logger.Path}, err
+		}
+		if info, err := os.Stat(trimmedPart); err == nil {
+			log("part %d/%d trim done size=%d", i+1, len(overlaps), info.Size())
 		}
 		trimmedParts = append(trimmedParts, trimmedPart)
 	}
 
 	if job.DownloadOnly {
-		return Result{WorkDir: workDir}, nil
+		log("download-only done")
+		return Result{WorkDir: workDir, LogPath: logger.Path}, nil
 	}
 
 	outPath := filepath.Join(job.OutputDir, outputName(job.Alias, job.From, job.To))
-	if err := concatMP4(ctx, trimmedParts, outPath); err != nil {
-		return Result{WorkDir: workDir}, err
+	log("concat start parts=%d output=%q", len(trimmedParts), outPath)
+	if err := concatMP4(ctx, trimmedParts, outPath, log); err != nil {
+		log("concat error: %v", err)
+		return Result{WorkDir: workDir, LogPath: logger.Path}, err
 	}
-	return Result{OutputPath: outPath, WorkDir: workDir}, nil
+	log("concat done output=%q", outPath)
+	if !job.KeepTemp && !job.DownloadOnly && !userWorkDir {
+		log("cleanup work_dir=%q", workDir)
+		logger.Close()
+		_ = os.RemoveAll(workDir)
+		return Result{OutputPath: outPath, WorkDir: workDir, LogPath: logger.Path}, nil
+	}
+	log("done")
+	return Result{OutputPath: outPath, WorkDir: workDir, LogPath: logger.Path}, nil
 }
 
 func overlappingSegments(segments []nvr.Segment, from time.Time, to time.Time) []overlap {
@@ -179,6 +220,7 @@ type renderOptions struct {
 	FrameRate      float64
 	Mode           Mode
 	ForceFrameRate bool
+	Logf           func(string, ...any)
 }
 
 func renderPartMP4(ctx context.Context, input string, output string, opts renderOptions) error {
@@ -217,14 +259,17 @@ func renderPartMP4(ctx context.Context, input string, output string, opts render
 		return fmt.Errorf("unsupported mode %q", opts.Mode)
 	}
 	args = append(args, "-movflags", "+faststart", output)
-	return runFFmpeg(ctx, ffmpeg, args)
+	return runFFmpeg(ctx, ffmpeg, args, opts.Logf)
 }
 
-func concatMP4(ctx context.Context, parts []string, output string) error {
+func concatMP4(ctx context.Context, parts []string, output string, logf func(string, ...any)) error {
 	if len(parts) == 0 {
 		return errors.New("no trimmed parts to concatenate")
 	}
 	if len(parts) == 1 {
+		if logf != nil {
+			logf("copy single part src=%q dst=%q", parts[0], output)
+		}
 		return copyFile(output, parts[0])
 	}
 	ffmpeg, err := findFFmpeg()
@@ -246,10 +291,13 @@ func concatMP4(ctx context.Context, parts []string, output string) error {
 		"-movflags", "+faststart",
 		output,
 	}
-	return runFFmpeg(ctx, ffmpeg, args)
+	return runFFmpeg(ctx, ffmpeg, args, logf)
 }
 
-func runFFmpeg(ctx context.Context, ffmpeg string, args []string) error {
+func runFFmpeg(ctx context.Context, ffmpeg string, args []string, logf func(string, ...any)) error {
+	if logf != nil {
+		logf("ffmpeg command: %s %s", ffmpeg, strings.Join(args, " "))
+	}
 	cmd := exec.CommandContext(ctx, ffmpeg, args...)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -264,6 +312,14 @@ func runFFmpeg(ctx context.Context, ffmpeg string, args []string) error {
 			return fmt.Errorf("ffmpeg failed: %w: %s", err, msg)
 		}
 		return fmt.Errorf("ffmpeg failed: %w", err)
+	}
+	if logf != nil {
+		if msg := strings.TrimSpace(stdout.String()); msg != "" {
+			logf("ffmpeg stdout: %s", msg)
+		}
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			logf("ffmpeg stderr: %s", msg)
+		}
 	}
 	return nil
 }
@@ -424,4 +480,33 @@ func formatBytes(n int64) string {
 		}
 	}
 	return fmt.Sprintf("%.1f PB", value/unit)
+}
+
+type logger struct {
+	Path string
+	file *os.File
+}
+
+func newLogger(path string) (*logger, error) {
+	file, err := os.Create(path)
+	if err != nil {
+		return nil, err
+	}
+	return &logger{Path: path, file: file}, nil
+}
+
+func (l *logger) Printf(format string, args ...any) {
+	if l == nil || l.file == nil {
+		return
+	}
+	line := fmt.Sprintf(format, args...)
+	fmt.Fprintf(l.file, "%s %s\n", time.Now().Format(time.RFC3339), line)
+}
+
+func (l *logger) Close() {
+	if l == nil || l.file == nil {
+		return
+	}
+	_ = l.file.Close()
+	l.file = nil
 }

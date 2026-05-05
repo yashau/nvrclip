@@ -21,6 +21,7 @@ type DownloadRequest struct {
 	Path     string
 	Segment  Segment
 	Progress func(Progress)
+	Logf     func(string, ...any)
 }
 
 type DownloadResult struct {

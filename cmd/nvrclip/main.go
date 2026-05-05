@@ -267,6 +267,9 @@ func runClip(ctx context.Context, req clipRequest) error {
 		Stdout:       os.Stdout,
 	})
 	if err != nil {
+		if result.LogPath != "" {
+			fmt.Fprintf(os.Stderr, "log %s\n", result.LogPath)
+		}
 		return err
 	}
 	if result.OutputPath != "" {

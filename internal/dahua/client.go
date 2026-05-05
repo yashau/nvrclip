@@ -113,9 +113,15 @@ func (c *Client) searchBase(ctx context.Context, baseURL string, channel int, fr
 func (c *Client) Download(ctx context.Context, req nvr.DownloadRequest) (nvr.DownloadResult, error) {
 	var lastErr error
 	for _, baseURL := range c.baseURLs {
+		if req.Logf != nil {
+			req.Logf("dahua download try base_url=%q", baseURL)
+		}
 		result, err := c.downloadBase(ctx, baseURL, req)
 		if err == nil {
 			return result, nil
+		}
+		if req.Logf != nil {
+			req.Logf("dahua download base_url=%q error=%v", baseURL, err)
 		}
 		lastErr = err
 	}
@@ -130,6 +136,9 @@ func (c *Client) downloadBase(ctx context.Context, baseURL string, req nvr.Downl
 		{"endTime", timefmt.Dahua(req.To)},
 		{"subtype", "0"},
 	})
+	if req.Logf != nil {
+		req.Logf("dahua download url=%s", downloadURL)
+	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
 	if err != nil {
 		return nvr.DownloadResult{}, err

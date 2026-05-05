@@ -114,9 +114,15 @@ func (c *Client) searchBase(ctx context.Context, baseURL string, channel int, fr
 func (c *Client) Download(ctx context.Context, req nvr.DownloadRequest) (nvr.DownloadResult, error) {
 	var lastErr error
 	for _, baseURL := range c.baseURLs {
+		if req.Logf != nil {
+			req.Logf("hikvision download try base_url=%q", baseURL)
+		}
 		result, err := c.downloadBase(ctx, baseURL, req)
 		if err == nil {
 			return result, nil
+		}
+		if req.Logf != nil {
+			req.Logf("hikvision download base_url=%q error=%v", baseURL, err)
 		}
 		lastErr = err
 	}
@@ -129,6 +135,9 @@ func (c *Client) downloadBase(ctx context.Context, baseURL string, req nvr.Downl
 		return nvr.DownloadResult{}, fmt.Errorf("hikvision segment has no playback URI")
 	}
 	body := downloadRequest(playbackURI)
+	if req.Logf != nil {
+		req.Logf("hikvision download endpoint=%s playback_uri=%s", baseURL+"/ISAPI/ContentMgmt/download", playbackURI)
+	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/ISAPI/ContentMgmt/download", strings.NewReader(body))
 	if err != nil {
 		return nvr.DownloadResult{}, err
