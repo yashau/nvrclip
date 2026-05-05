@@ -2,6 +2,7 @@
 /nvrclip
 /dist/
 /out/
+/nvrclip_temp/
 *.local.toml
 *.mp4
 *.dav

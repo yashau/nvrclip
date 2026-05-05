@@ -73,7 +73,11 @@ func Run(ctx context.Context, job Job) (Result, error) {
 	workDir := job.WorkDir
 	var cleanup bool
 	if workDir == "" {
-		tmp, err := os.MkdirTemp("", "nvrclip-*")
+		tmpRoot := filepath.Join(".", "nvrclip_temp")
+		if err := os.MkdirAll(tmpRoot, 0o755); err != nil {
+			return Result{}, err
+		}
+		tmp, err := os.MkdirTemp(tmpRoot, "run-*")
 		if err != nil {
 			return Result{}, err
 		}
