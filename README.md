@@ -5,7 +5,7 @@
 The basic idea:
 
 ```powershell
-.\nvrclip.exe grab shop cashier --from "2026-05-06 14:50" --to "2026-05-06 15:20"
+.\nvrclip.exe grab "shop cashier" --from "2026-05-06 14:50" --to "2026-05-06 15:20"
 ```
 
 Output:
@@ -105,28 +105,60 @@ $env:NVRCLIP_SHOP_PASSWORD = "your-password"
 
 ## Usage
 
-Use a globally unique channel alias:
+### Command forms
+
+`grab` is the shorthand form. Use it when the channel alias is globally unique across all configured NVRs and you already know the exact start and end times:
 
 ```powershell
+.\nvrclip.exe grab "shop cashier" --from "2026-05-05 14:00" --to "2026-05-05 14:10"
+```
+
+This is equivalent to resolving `"shop cashier"` to its configured NVR and channel, then running the same clip export pipeline as `download`.
+
+For convenience, `grab` joins every argument before the first flag into the channel alias. These two commands are equivalent:
+
+```powershell
+.\nvrclip.exe grab "shop cashier" --from "2026-05-05 14:00" --to "2026-05-05 14:10"
 .\nvrclip.exe grab shop cashier --from "2026-05-05 14:00" --to "2026-05-05 14:10"
 ```
 
-Use an explicit NVR and channel alias:
+`download` is the explicit form. Use it when you want to name the NVR directly, when the same channel alias exists on more than one NVR, or when you want to use a numeric channel:
 
 ```powershell
 .\nvrclip.exe download shop --channel front-door --around "2026-05-05 14:05" --minutes 10
 ```
 
-Use an explicit NVR and channel number:
+Both commands produce a final MP4 by default. Despite the command name, `download` does not only save raw NVR files unless you pass `--download-only`.
+
+### Time shorthands
+
+Use exact start and end times with either command:
+
+```powershell
+.\nvrclip.exe grab "shop cashier" --from "2026-05-05 14:00" --to "2026-05-05 14:10"
+.\nvrclip.exe download warehouse --channel office --from "2026-05-05 14:00" --to "2026-05-05 14:10"
+```
+
+Use `--around` with `--minutes` on `download` when you want a clip centered on a timestamp:
+
+```powershell
+.\nvrclip.exe download shop --channel front-door --around "2026-05-05 14:05" --minutes 10
+```
+
+That example exports 10 minutes total: 5 minutes before and 5 minutes after `2026-05-05 14:05`.
+
+### Channel selection
+
+Use a channel alias with `download`:
+
+```powershell
+.\nvrclip.exe download shop --channel front-door --around "2026-05-05 14:05" --minutes 10
+```
+
+Use a channel number with `download`:
 
 ```powershell
 .\nvrclip.exe download warehouse --channel 1 --around "2026-05-05 14:05" --minutes 10
-```
-
-Use exact start and end times:
-
-```powershell
-.\nvrclip.exe download warehouse --channel office --from "2026-05-05 14:00" --to "2026-05-05 14:10"
 ```
 
 Use exact H.264 re-encoding for precise cuts and safer joins across mixed NVR parts:
