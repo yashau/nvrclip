@@ -1,0 +1,11 @@
+[office]
+type = "dahua"
+base_url = "http://172.20.32.8"
+username = "admin"
+password_env = "NVRCLIP_OFFICE_PASSWORD"
+frame_rate = 25
+timeout = "5m"
+
+[office.channels]
+1 = "front-door"
+2 = "shop cashier"

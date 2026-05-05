@@ -1,0 +1,7 @@
+/nvrclip.exe
+/nvrclip
+/dist/
+/out/
+*.local.toml
+*.mp4
+*.dav
