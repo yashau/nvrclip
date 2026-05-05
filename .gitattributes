@@ -1,0 +1,22 @@
+* text=auto eol=lf
+
+*.go text eol=lf
+*.md text eol=lf
+*.toml text eol=lf
+*.json text eol=lf
+*.mod text eol=lf
+*.sum text eol=lf
+*.txt text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
+*.syso binary
+*.exe binary
+*.dll binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.mp4 binary
+*.dav binary
