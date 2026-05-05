@@ -32,6 +32,7 @@ Flags:
   --keep-temp         keep downloaded temporary files
   --download-only     download NVR chunks but skip ffmpeg output
   --mode copy|exact   copy remux or exact re-encode trim (default: copy)
+  --format copy|exact alias for --mode
 `
 
 func main() {
@@ -72,9 +73,14 @@ func runGrab(ctx context.Context, args []string) error {
 	keepTemp := fs.Bool("keep-temp", false, "keep downloaded temporary files")
 	downloadOnly := fs.Bool("download-only", false, "download NVR chunks but skip ffmpeg output")
 	mode := fs.String("mode", "copy", "copy or exact")
+	format := fs.String("format", "", "alias for --mode; copy or exact")
 	fromRaw := fs.String("from", "", "clip start time")
 	toRaw := fs.String("to", "", "clip end time")
 	if err := fs.Parse(flagArgs); err != nil {
+		return err
+	}
+	selectedMode, err := resolveModeFlag(fs, *mode, *format)
+	if err != nil {
 		return err
 	}
 	if *fromRaw == "" || *toRaw == "" {
@@ -122,7 +128,7 @@ func runGrab(ctx context.Context, args []string) error {
 		WorkDir:      *workDir,
 		KeepTemp:     *keepTemp,
 		DownloadOnly: *downloadOnly,
-		Mode:         *mode,
+		Mode:         selectedMode,
 		FrameRate:    frameRate,
 	})
 }
@@ -141,12 +147,17 @@ func runDownload(ctx context.Context, args []string) error {
 	keepTemp := fs.Bool("keep-temp", false, "keep downloaded temporary files")
 	downloadOnly := fs.Bool("download-only", false, "download NVR chunks but skip ffmpeg output")
 	mode := fs.String("mode", "copy", "copy or exact")
+	format := fs.String("format", "", "alias for --mode; copy or exact")
 	channelRaw := fs.String("channel", "", "channel alias or number")
 	aroundRaw := fs.String("around", "", "center time")
 	minutes := fs.Float64("minutes", 0, "minutes around center time")
 	fromRaw := fs.String("from", "", "clip start time")
 	toRaw := fs.String("to", "", "clip end time")
 	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	selectedMode, err := resolveModeFlag(fs, *mode, *format)
+	if err != nil {
 		return err
 	}
 	if *channelRaw == "" {
@@ -219,7 +230,7 @@ func runDownload(ctx context.Context, args []string) error {
 		WorkDir:      *workDir,
 		KeepTemp:     *keepTemp,
 		DownloadOnly: *downloadOnly,
-		Mode:         *mode,
+		Mode:         selectedMode,
 		FrameRate:    frameRate,
 	})
 }
@@ -316,6 +327,31 @@ func splitAliasAndFlags(args []string) ([]string, []string) {
 
 func parseChannelNumber(raw string) (int, error) {
 	return strconv.Atoi(raw)
+}
+
+func resolveModeFlag(fs *flag.FlagSet, modeValue string, formatValue string) (string, error) {
+	modeSet := false
+	formatSet := false
+	fs.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "mode":
+			modeSet = true
+		case "format":
+			formatSet = true
+		}
+	})
+	if formatSet {
+		if modeSet && modeValue != formatValue {
+			return "", fmt.Errorf("--mode %q conflicts with --format %q", modeValue, formatValue)
+		}
+		modeValue = formatValue
+	}
+	switch clip.Mode(modeValue) {
+	case clip.ModeCopy, clip.ModeExact:
+		return modeValue, nil
+	default:
+		return "", fmt.Errorf("unsupported format/mode %q; use copy or exact", modeValue)
+	}
 }
 
 func parseLocalTime(raw string) (time.Time, error) {

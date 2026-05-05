@@ -129,6 +129,12 @@ Use exact start and end times:
 .\nvrclip.exe download warehouse --channel office --from "2026-05-05 14:00" --to "2026-05-05 14:10"
 ```
 
+Use exact H.264 re-encoding for precise cuts and safer joins across mixed NVR parts:
+
+```powershell
+.\nvrclip.exe download shop --channel 1 --from "2026-05-03 22:50" --to "2026-05-03 23:15" --format exact
+```
+
 Keep downloaded/intermediate files for debugging:
 
 ```powershell
@@ -170,7 +176,7 @@ part 2/2 done (4.5 MB)
 Default mode:
 
 ```powershell
---mode copy
+--format copy
 ```
 
 This remuxes without re-encoding where possible.
@@ -178,7 +184,9 @@ This remuxes without re-encoding where possible.
 Exact mode:
 
 ```powershell
---mode exact
+--format exact
 ```
 
-This re-encodes with H.264 for more precise cuts when stream-copy cutting is not enough.
+This re-encodes with H.264 for more precise cuts when stream-copy cutting is not enough. When a clip spans multiple recording files, exact mode normalizes the parts to matching video dimensions before joining them.
+
+`--mode copy` and `--mode exact` are also accepted.

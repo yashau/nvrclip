@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -117,6 +118,8 @@ func Run(ctx context.Context, job Job) (Result, error) {
 	log("overlaps=%d", len(overlaps))
 
 	trimmedParts := make([]string, 0, len(overlaps))
+	exactWidth := 0
+	exactHeight := 0
 	for i, ov := range overlaps {
 		rawPart := filepath.Join(workDir, fmt.Sprintf("part_%03d.src", i))
 		log("part %d/%d download start overlap=%s raw=%q segment_start=%s segment_end=%s", i+1, len(overlaps), humanRange(ov.From, ov.To), rawPart, humanTime(ov.Segment.Start), humanTime(ov.Segment.End))
@@ -159,6 +162,16 @@ func Run(ctx context.Context, job Job) (Result, error) {
 			offset = 0
 		}
 		duration := ov.To.Sub(ov.From)
+		if job.Mode == ModeExact && (exactWidth == 0 || exactHeight == 0) {
+			width, height, err := probeVideoDimensions(ctx, rawPart, log)
+			if err != nil {
+				log("exact normalize probe failed, continuing without fixed dimensions: %v", err)
+			} else {
+				exactWidth = evenDimension(width)
+				exactHeight = evenDimension(height)
+				log("exact normalize target width=%d height=%d", exactWidth, exactHeight)
+			}
+		}
 		log("part %d/%d trim start raw=%q trimmed=%q offset=%s duration=%s", i+1, len(overlaps), rawPart, trimmedPart, offset, duration)
 		if err := renderPartMP4(ctx, rawPart, trimmedPart, renderOptions{
 			Offset:         offset,
@@ -166,6 +179,8 @@ func Run(ctx context.Context, job Job) (Result, error) {
 			FrameRate:      job.FrameRate,
 			Mode:           job.Mode,
 			ForceFrameRate: download.ForceFrameRate,
+			TargetWidth:    exactWidth,
+			TargetHeight:   exactHeight,
 			Logf:           log,
 		}); err != nil {
 			log("part %d/%d trim error: %v", i+1, len(overlaps), err)
@@ -221,9 +236,27 @@ type renderOptions struct {
 	Mode           Mode
 	ForceFrameRate bool
 	Logf           func(string, ...any)
+	InputFormat    string
+	TargetWidth    int
+	TargetHeight   int
 }
 
 func renderPartMP4(ctx context.Context, input string, output string, opts renderOptions) error {
+	if err := renderPartMP4Once(ctx, input, output, opts); err == nil {
+		return nil
+	} else {
+		if opts.Logf != nil {
+			opts.Logf("trim normal input failed, retrying as dhav: %v", err)
+		}
+		opts.InputFormat = "dhav"
+		if retryErr := renderPartMP4Once(ctx, input, output, opts); retryErr != nil {
+			return fmt.Errorf("%w; dhav retry failed: %v", err, retryErr)
+		}
+		return nil
+	}
+}
+
+func renderPartMP4Once(ctx context.Context, input string, output string, opts renderOptions) error {
 	ffmpeg, err := findFFmpeg()
 	if err != nil {
 		return err
@@ -238,6 +271,9 @@ func renderPartMP4(ctx context.Context, input string, output string, opts render
 			"-fflags", "+genpts",
 			"-r", fmt.Sprintf("%.3f", opts.FrameRate),
 		)
+	}
+	if opts.InputFormat != "" {
+		args = append(args, "-f", opts.InputFormat)
 	}
 	args = append(args,
 		"-i", input,
@@ -254,12 +290,89 @@ func renderPartMP4(ctx context.Context, input string, output string, opts render
 	case ModeCopy:
 		args = append(args, "-c:v", "copy")
 	case ModeExact:
+		if opts.TargetWidth > 0 && opts.TargetHeight > 0 {
+			filter := fmt.Sprintf(
+				"scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,setsar=1",
+				opts.TargetWidth,
+				opts.TargetHeight,
+				opts.TargetWidth,
+				opts.TargetHeight,
+			)
+			args = append(args, "-vf", filter)
+		}
 		args = append(args, "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p")
 	default:
 		return fmt.Errorf("unsupported mode %q", opts.Mode)
 	}
 	args = append(args, "-movflags", "+faststart", output)
 	return runFFmpeg(ctx, ffmpeg, args, opts.Logf)
+}
+
+func probeVideoDimensions(ctx context.Context, input string, logf func(string, ...any)) (int, int, error) {
+	width, height, err := probeVideoDimensionsOnce(ctx, input, "")
+	if err == nil {
+		return width, height, nil
+	}
+	if logf != nil {
+		logf("ffprobe normal input failed, retrying as dhav: %v", err)
+	}
+	width, height, retryErr := probeVideoDimensionsOnce(ctx, input, "dhav")
+	if retryErr != nil {
+		return 0, 0, fmt.Errorf("%w; dhav retry failed: %v", err, retryErr)
+	}
+	return width, height, nil
+}
+
+func probeVideoDimensionsOnce(ctx context.Context, input string, inputFormat string) (int, int, error) {
+	ffprobe, err := findFFprobe()
+	if err != nil {
+		return 0, 0, err
+	}
+	args := []string{"-v", "error"}
+	if inputFormat != "" {
+		args = append(args, "-f", inputFormat)
+	}
+	args = append(args,
+		"-select_streams", "v:0",
+		"-show_entries", "stream=width,height",
+		"-of", "csv=p=0:s=x",
+		input,
+	)
+	cmd := exec.CommandContext(ctx, ffprobe, args...)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = strings.TrimSpace(stdout.String())
+		}
+		if msg != "" {
+			return 0, 0, fmt.Errorf("ffprobe failed: %w: %s", err, msg)
+		}
+		return 0, 0, fmt.Errorf("ffprobe failed: %w", err)
+	}
+	line := strings.TrimSpace(stdout.String())
+	if i := strings.IndexByte(line, '\n'); i >= 0 {
+		line = strings.TrimSpace(line[:i])
+	}
+	widthRaw, heightRaw, ok := strings.Cut(line, "x")
+	if !ok {
+		return 0, 0, fmt.Errorf("ffprobe returned unexpected dimensions %q", line)
+	}
+	width, err := strconv.Atoi(strings.TrimSpace(widthRaw))
+	if err != nil {
+		return 0, 0, fmt.Errorf("parse ffprobe width %q: %w", widthRaw, err)
+	}
+	height, err := strconv.Atoi(strings.TrimSpace(heightRaw))
+	if err != nil {
+		return 0, 0, fmt.Errorf("parse ffprobe height %q: %w", heightRaw, err)
+	}
+	if width <= 0 || height <= 0 {
+		return 0, 0, fmt.Errorf("ffprobe returned invalid dimensions %dx%d", width, height)
+	}
+	return width, height, nil
 }
 
 func concatMP4(ctx context.Context, parts []string, output string, logf func(string, ...any)) error {
@@ -364,6 +477,34 @@ func findFFmpeg() (string, error) {
 		return "", errors.New("ffmpeg not found; install ffmpeg or set NVRCLIP_FFMPEG")
 	}
 	return path, nil
+}
+
+func findFFprobe() (string, error) {
+	if override := os.Getenv("NVRCLIP_FFPROBE"); override != "" {
+		return override, nil
+	}
+	if ffmpegOverride := os.Getenv("NVRCLIP_FFMPEG"); ffmpegOverride != "" {
+		name := "ffprobe"
+		if strings.EqualFold(filepath.Ext(ffmpegOverride), ".exe") {
+			name = "ffprobe.exe"
+		}
+		candidate := filepath.Join(filepath.Dir(ffmpegOverride), name)
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate, nil
+		}
+	}
+	path, err := exec.LookPath("ffprobe")
+	if err != nil {
+		return "", errors.New("ffprobe not found; install ffmpeg or set NVRCLIP_FFPROBE")
+	}
+	return path, nil
+}
+
+func evenDimension(n int) int {
+	if n > 1 && n%2 != 0 {
+		return n - 1
+	}
+	return n
 }
 
 func outputName(alias string, from time.Time, to time.Time) string {
