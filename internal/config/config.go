@@ -21,6 +21,7 @@ type NVR struct {
 	Username    string             `toml:"username"`
 	Password    string             `toml:"password"`
 	PasswordEnv string             `toml:"password_env"`
+	InsecureTLS bool               `toml:"insecure_tls"`
 	Timeout     string             `toml:"timeout"`
 	FrameRate   float64            `toml:"frame_rate"`
 	Channels    map[string]string  `toml:"channels"`

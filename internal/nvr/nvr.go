@@ -19,7 +19,14 @@ type DownloadRequest struct {
 	From     time.Time
 	To       time.Time
 	Path     string
+	Segment  Segment
 	Progress func(Progress)
+}
+
+type DownloadResult struct {
+	From           time.Time
+	To             time.Time
+	ForceFrameRate bool
 }
 
 type Progress struct {
@@ -29,5 +36,5 @@ type Progress struct {
 
 type Adapter interface {
 	Search(ctx context.Context, channel int, from time.Time, to time.Time) ([]Segment, error)
-	Download(ctx context.Context, req DownloadRequest) error
+	Download(ctx context.Context, req DownloadRequest) (DownloadResult, error)
 }

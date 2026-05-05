@@ -1,6 +1,6 @@
 [office]
 type = "dahua"
-base_url = "http://172.20.32.8"
+base_url = "172.20.32.8"
 username = "admin"
 password_env = "NVRCLIP_OFFICE_PASSWORD"
 frame_rate = 25
@@ -9,3 +9,15 @@ timeout = "5m"
 [office.channels]
 1 = "front-door"
 2 = "shop cashier"
+
+[warehouse]
+type = "hikvision"
+base_url = "10.10.37.5"
+username = "admin"
+password_env = "NVRCLIP_WAREHOUSE_PASSWORD"
+insecure_tls = true
+frame_rate = 25
+timeout = "30m"
+
+[warehouse.channels]
+1 = "front-door"

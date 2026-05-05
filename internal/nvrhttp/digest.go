@@ -1,8 +1,9 @@
-package dahua
+package nvrhttp
 
 import (
 	"crypto/md5"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -10,7 +11,34 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"time"
 )
+
+type DigestOptions struct {
+	Username    string
+	Password    string
+	Timeout     time.Duration
+	InsecureTLS bool
+}
+
+func NewDigestClient(opts DigestOptions) *http.Client {
+	var base http.RoundTripper = http.DefaultTransport
+	if opts.InsecureTLS {
+		base = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+	}
+	timeout := opts.Timeout
+	if timeout == 0 {
+		timeout = 2 * time.Minute
+	}
+	return &http.Client{
+		Timeout: timeout,
+		Transport: &digestTransport{
+			username: opts.Username,
+			password: opts.Password,
+			base:     base,
+		},
+	}
+}
 
 type digestTransport struct {
 	username string
@@ -26,6 +54,13 @@ func (t *digestTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	first := req.Clone(req.Context())
+	if req.Body != nil && req.GetBody != nil {
+		body, err := req.GetBody()
+		if err != nil {
+			return nil, err
+		}
+		first.Body = body
+	}
 	resp, err := base.RoundTrip(first)
 	if err != nil {
 		return nil, err
@@ -44,6 +79,13 @@ func (t *digestTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	second := req.Clone(req.Context())
+	if req.Body != nil && req.GetBody != nil {
+		body, err := req.GetBody()
+		if err != nil {
+			return nil, err
+		}
+		second.Body = body
+	}
 	second.Header.Set("Authorization", t.authorization(second, params))
 	return base.RoundTrip(second)
 }

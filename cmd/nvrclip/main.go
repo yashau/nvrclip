@@ -14,6 +14,8 @@ import (
 	"github.com/yashau/nvrclip/internal/clip"
 	"github.com/yashau/nvrclip/internal/config"
 	"github.com/yashau/nvrclip/internal/dahua"
+	"github.com/yashau/nvrclip/internal/hikvision"
+	"github.com/yashau/nvrclip/internal/nvr"
 )
 
 const usage = `nvrclip exports exact clips from NVR recordings.
@@ -238,19 +240,11 @@ type clipRequest struct {
 }
 
 func runClip(ctx context.Context, req clipRequest) error {
-	if strings.ToLower(req.NVR.Type) != "dahua" {
-		return fmt.Errorf("NVR %q has unsupported type %q", req.NVRName, req.NVR.Type)
-	}
 	password, err := req.NVR.ResolvePassword()
 	if err != nil {
 		return err
 	}
-	adapter, err := dahua.New(dahua.Options{
-		BaseURL:  req.NVR.BaseURL,
-		Username: req.NVR.Username,
-		Password: password,
-		Timeout:  req.NVR.TimeoutDuration(),
-	})
+	adapter, err := newAdapter(req.NVR, password)
 	if err != nil {
 		return err
 	}
@@ -283,6 +277,29 @@ func runClip(ctx context.Context, req clipRequest) error {
 		fmt.Fprintf(os.Stdout, "kept work dir %s\n", abs)
 	}
 	return nil
+}
+
+func newAdapter(nvrCfg config.NVR, password string) (nvr.Adapter, error) {
+	switch strings.ToLower(nvrCfg.Type) {
+	case "dahua":
+		return dahua.New(dahua.Options{
+			BaseURL:     nvrCfg.BaseURL,
+			Username:    nvrCfg.Username,
+			Password:    password,
+			Timeout:     nvrCfg.TimeoutDuration(),
+			InsecureTLS: nvrCfg.InsecureTLS,
+		})
+	case "hikvision":
+		return hikvision.New(hikvision.Options{
+			BaseURL:     nvrCfg.BaseURL,
+			Username:    nvrCfg.Username,
+			Password:    password,
+			Timeout:     nvrCfg.TimeoutDuration(),
+			InsecureTLS: nvrCfg.InsecureTLS,
+		})
+	default:
+		return nil, fmt.Errorf("NVR %q has unsupported type %q", nvrCfg.Name, nvrCfg.Type)
+	}
 }
 
 func splitAliasAndFlags(args []string) ([]string, []string) {

@@ -23,7 +23,7 @@ Create `nvrclip.toml`:
 ```toml
 [office]
 type = "dahua"
-base_url = "http://172.20.32.8"
+base_url = "172.20.32.8"
 username = "admin"
 password_env = "NVRCLIP_OFFICE_PASSWORD"
 frame_rate = 25
@@ -32,12 +32,26 @@ timeout = "5m"
 [office.channels]
 1 = "front-door"
 2 = "shop cashier"
+
+[warehouse]
+type = "hikvision"
+base_url = "10.10.37.5"
+username = "admin"
+password_env = "NVRCLIP_WAREHOUSE_PASSWORD"
+insecure_tls = true
+frame_rate = 25
+timeout = "30m"
+
+[warehouse.channels]
+1 = "loading bay"
 ```
 
-Then set the password:
+`base_url` can be just an IP/host. nvrclip tries HTTPS first, then HTTP. Set `insecure_tls = true` for NVRs that use self-signed HTTPS certificates.
+
+Passwords can be stored directly in TOML with `password`, or pulled from the environment with `password_env`:
 
 ```powershell
-$env:NVRCLIP_OFFICE_PASSWORD = "admin12345"
+$env:NVRCLIP_OFFICE_PASSWORD = "your-password"
 ```
 
 ## Usage
@@ -61,5 +75,7 @@ Explicit NVR and numeric channel:
 ```
 
 The Dahua adapter searches for every recording segment overlapping the requested range, downloads each overlapping interval, joins them in order, and writes one MP4.
+
+The Hikvision adapter searches ISAPI recording segments, downloads matching segment files over HTTP(S), trims each part locally, then joins the final MP4.
 
 By default `--mode copy` remuxes without re-encoding. Use `--mode exact` to re-encode with H.264 when you need frame-accurate output.

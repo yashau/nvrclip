@@ -15,56 +15,63 @@ import (
 	"time"
 
 	"github.com/yashau/nvrclip/internal/nvr"
+	"github.com/yashau/nvrclip/internal/nvrhttp"
 	"github.com/yashau/nvrclip/internal/timefmt"
 )
 
 type Options struct {
-	BaseURL  string
-	Username string
-	Password string
-	Timeout  time.Duration
+	BaseURL     string
+	Username    string
+	Password    string
+	Timeout     time.Duration
+	InsecureTLS bool
 }
 
 type Client struct {
-	baseURL string
-	http    *http.Client
+	baseURLs []string
+	http     *http.Client
 }
 
 func New(opts Options) (*Client, error) {
-	if opts.BaseURL == "" {
-		return nil, fmt.Errorf("dahua base URL is empty")
-	}
-	base, err := url.Parse(strings.TrimRight(opts.BaseURL, "/"))
+	bases, err := nvrhttp.ParseBaseURLs(opts.BaseURL)
 	if err != nil {
 		return nil, err
-	}
-	if base.Scheme == "" {
-		base.Scheme = "http"
 	}
 	timeout := opts.Timeout
 	if timeout == 0 {
 		timeout = 2 * time.Minute
 	}
 	return &Client{
-		baseURL: strings.TrimRight(base.String(), "/"),
-		http: &http.Client{
-			Timeout: timeout,
-			Transport: &digestTransport{
-				username: opts.Username,
-				password: opts.Password,
-			},
-		},
+		baseURLs: bases.URLs,
+		http: nvrhttp.NewDigestClient(nvrhttp.DigestOptions{
+			Username:    opts.Username,
+			Password:    opts.Password,
+			Timeout:     timeout,
+			InsecureTLS: opts.InsecureTLS,
+		}),
 	}, nil
 }
 
 func (c *Client) Search(ctx context.Context, channel int, from time.Time, to time.Time) ([]nvr.Segment, error) {
-	object, err := c.createFinder(ctx)
+	var lastErr error
+	for _, baseURL := range c.baseURLs {
+		segments, err := c.searchBase(ctx, baseURL, channel, from, to)
+		if err == nil {
+			return segments, nil
+		}
+		lastErr = err
+	}
+	return nil, lastErr
+}
+
+func (c *Client) searchBase(ctx context.Context, baseURL string, channel int, from time.Time, to time.Time) ([]nvr.Segment, error) {
+	object, err := c.createFinder(ctx, baseURL)
 	if err != nil {
 		return nil, err
 	}
-	defer c.closeFinder(context.Background(), object)
+	defer c.closeFinder(context.Background(), baseURL, object)
 
-	findURL := c.endpointPairs("/cgi-bin/mediaFileFind.cgi", []queryPair{
+	findURL := endpointPairs(baseURL, "/cgi-bin/mediaFileFind.cgi", []queryPair{
 		{"action", "findFile"},
 		{"object", object},
 		{"condition.Channel", strconv.Itoa(channel)},
@@ -78,7 +85,7 @@ func (c *Client) Search(ctx context.Context, channel int, from time.Time, to tim
 
 	var segments []nvr.Segment
 	for {
-		nextURL := c.endpointPairs("/cgi-bin/mediaFileFind.cgi", []queryPair{
+		nextURL := endpointPairs(baseURL, "/cgi-bin/mediaFileFind.cgi", []queryPair{
 			{"action", "findNextFile"},
 			{"object", object},
 			{"count", "128"},
@@ -103,8 +110,20 @@ func (c *Client) Search(ctx context.Context, channel int, from time.Time, to tim
 	return segments, nil
 }
 
-func (c *Client) Download(ctx context.Context, req nvr.DownloadRequest) error {
-	downloadURL := c.endpointPairs("/cgi-bin/loadfile.cgi", []queryPair{
+func (c *Client) Download(ctx context.Context, req nvr.DownloadRequest) (nvr.DownloadResult, error) {
+	var lastErr error
+	for _, baseURL := range c.baseURLs {
+		result, err := c.downloadBase(ctx, baseURL, req)
+		if err == nil {
+			return result, nil
+		}
+		lastErr = err
+	}
+	return nvr.DownloadResult{}, lastErr
+}
+
+func (c *Client) downloadBase(ctx context.Context, baseURL string, req nvr.DownloadRequest) (nvr.DownloadResult, error) {
+	downloadURL := endpointPairs(baseURL, "/cgi-bin/loadfile.cgi", []queryPair{
 		{"action", "startLoad"},
 		{"channel", strconv.Itoa(req.Channel)},
 		{"startTime", timefmt.Dahua(req.From)},
@@ -113,21 +132,21 @@ func (c *Client) Download(ctx context.Context, req nvr.DownloadRequest) error {
 	})
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
 	if err != nil {
-		return err
+		return nvr.DownloadResult{}, err
 	}
 	resp, err := c.http.Do(httpReq)
 	if err != nil {
-		return err
+		return nvr.DownloadResult{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("dahua download failed: %s: %s", resp.Status, strings.TrimSpace(string(body)))
+		return nvr.DownloadResult{}, fmt.Errorf("dahua download failed: %s: %s", resp.Status, strings.TrimSpace(string(body)))
 	}
 
 	out, err := os.Create(req.Path)
 	if err != nil {
-		return err
+		return nvr.DownloadResult{}, err
 	}
 	defer out.Close()
 	reader := io.Reader(resp.Body)
@@ -139,7 +158,7 @@ func (c *Client) Download(ctx context.Context, req nvr.DownloadRequest) error {
 		}
 	}
 	if _, err := io.Copy(out, reader); err != nil {
-		return err
+		return nvr.DownloadResult{}, err
 	}
 	if req.Progress != nil {
 		info, err := out.Stat()
@@ -147,11 +166,11 @@ func (c *Client) Download(ctx context.Context, req nvr.DownloadRequest) error {
 			req.Progress(nvr.Progress{Downloaded: info.Size(), Total: resp.ContentLength})
 		}
 	}
-	return nil
+	return nvr.DownloadResult{From: req.From, To: req.To, ForceFrameRate: true}, nil
 }
 
-func (c *Client) createFinder(ctx context.Context) (string, error) {
-	text, err := c.getTextURL(ctx, c.endpointPairs("/cgi-bin/mediaFileFind.cgi", []queryPair{
+func (c *Client) createFinder(ctx context.Context, baseURL string) (string, error) {
+	text, err := c.getTextURL(ctx, endpointPairs(baseURL, "/cgi-bin/mediaFileFind.cgi", []queryPair{
 		{"action", "factory.create"},
 	}))
 	if err != nil {
@@ -166,15 +185,15 @@ func (c *Client) createFinder(ctx context.Context) (string, error) {
 	return "", fmt.Errorf("dahua factory.create returned no object: %q", text)
 }
 
-func (c *Client) closeFinder(ctx context.Context, object string) {
-	_, _ = c.getTextURL(ctx, c.endpointPairs("/cgi-bin/mediaFileFind.cgi", []queryPair{
+func (c *Client) closeFinder(ctx context.Context, baseURL string, object string) {
+	_, _ = c.getTextURL(ctx, endpointPairs(baseURL, "/cgi-bin/mediaFileFind.cgi", []queryPair{
 		{"action", "close"},
 		{"object", object},
 	}))
 }
 
 func (c *Client) getText(ctx context.Context, path string, values url.Values) (string, error) {
-	return c.getTextURL(ctx, c.endpoint(path, values))
+	return c.getTextURL(ctx, endpoint(c.baseURLs[0], path, values))
 }
 
 func (c *Client) getTextURL(ctx context.Context, rawURL string) (string, error) {
@@ -197,8 +216,8 @@ func (c *Client) getTextURL(ctx context.Context, rawURL string) (string, error) 
 	return string(body), nil
 }
 
-func (c *Client) endpoint(path string, values url.Values) string {
-	u := c.baseURL + path
+func endpoint(baseURL string, path string, values url.Values) string {
+	u := baseURL + path
 	if len(values) > 0 {
 		u += "?" + values.Encode()
 	}
@@ -210,8 +229,8 @@ type queryPair struct {
 	value string
 }
 
-func (c *Client) endpointPairs(path string, pairs []queryPair) string {
-	u := c.baseURL + path
+func endpointPairs(baseURL string, path string, pairs []queryPair) string {
+	u := baseURL + path
 	if len(pairs) == 0 {
 		return u
 	}

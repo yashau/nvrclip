@@ -95,22 +95,24 @@ func Run(ctx context.Context, job Job) (Result, error) {
 		return Result{}, fmt.Errorf("no recordings overlap %s to %s on channel %d", humanTime(job.From), humanTime(job.To), job.Channel)
 	}
 
-	parts := make([]string, 0, len(overlaps))
+	trimmedParts := make([]string, 0, len(overlaps))
 	for i, ov := range overlaps {
-		part := filepath.Join(workDir, fmt.Sprintf("part_%03d.dav", i))
+		rawPart := filepath.Join(workDir, fmt.Sprintf("part_%03d.src", i))
 		progress := newPartProgress(job.Stdout, i+1, len(overlaps), ov.From, ov.To)
 		progress.Start()
-		if err := job.Adapter.Download(ctx, nvr.DownloadRequest{
+		download, err := job.Adapter.Download(ctx, nvr.DownloadRequest{
 			Channel:  job.Channel,
 			From:     ov.From,
 			To:       ov.To,
-			Path:     part,
+			Path:     rawPart,
+			Segment:  ov.Segment,
 			Progress: progress.Update,
-		}); err != nil {
+		})
+		if err != nil {
 			progress.Done(0)
 			return Result{WorkDir: workDir}, err
 		}
-		info, err := os.Stat(part)
+		info, err := os.Stat(rawPart)
 		if err != nil {
 			progress.Done(0)
 			return Result{WorkDir: workDir}, err
@@ -119,19 +121,34 @@ func Run(ctx context.Context, job Job) (Result, error) {
 		if info.Size() == 0 {
 			return Result{WorkDir: workDir}, fmt.Errorf("downloaded empty part for %s", humanRange(ov.From, ov.To))
 		}
-		parts = append(parts, part)
+		if job.DownloadOnly {
+			continue
+		}
+
+		trimmedPart := filepath.Join(workDir, fmt.Sprintf("trimmed_%03d.mp4", i))
+		offset := ov.From.Sub(download.From)
+		if offset < 0 {
+			offset = 0
+		}
+		duration := ov.To.Sub(ov.From)
+		if err := renderPartMP4(ctx, rawPart, trimmedPart, renderOptions{
+			Offset:         offset,
+			Duration:       duration,
+			FrameRate:      job.FrameRate,
+			Mode:           job.Mode,
+			ForceFrameRate: download.ForceFrameRate,
+		}); err != nil {
+			return Result{WorkDir: workDir}, err
+		}
+		trimmedParts = append(trimmedParts, trimmedPart)
 	}
 
-	joined := filepath.Join(workDir, "joined.dav")
-	if err := joinFiles(joined, parts); err != nil {
-		return Result{WorkDir: workDir}, err
-	}
 	if job.DownloadOnly {
 		return Result{WorkDir: workDir}, nil
 	}
 
 	outPath := filepath.Join(job.OutputDir, outputName(job.Alias, job.From, job.To))
-	if err := renderMP4(ctx, joined, outPath, job.FrameRate, job.To.Sub(job.From), job.Mode); err != nil {
+	if err := concatMP4(ctx, trimmedParts, outPath); err != nil {
 		return Result{WorkDir: workDir}, err
 	}
 	return Result{OutputPath: outPath, WorkDir: workDir}, nil
@@ -152,29 +169,15 @@ func overlappingSegments(segments []nvr.Segment, from time.Time, to time.Time) [
 	return out
 }
 
-func joinFiles(dst string, parts []string) error {
-	out, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-	for _, part := range parts {
-		in, err := os.Open(part)
-		if err != nil {
-			return err
-		}
-		if _, err := io.Copy(out, in); err != nil {
-			in.Close()
-			return err
-		}
-		if err := in.Close(); err != nil {
-			return err
-		}
-	}
-	return nil
+type renderOptions struct {
+	Offset         time.Duration
+	Duration       time.Duration
+	FrameRate      float64
+	Mode           Mode
+	ForceFrameRate bool
 }
 
-func renderMP4(ctx context.Context, input string, output string, fps float64, duration time.Duration, mode Mode) error {
+func renderPartMP4(ctx context.Context, input string, output string, opts renderOptions) error {
 	ffmpeg, err := findFFmpeg()
 	if err != nil {
 		return err
@@ -183,23 +186,66 @@ func renderMP4(ctx context.Context, input string, output string, fps float64, du
 		"-y",
 		"-hide_banner",
 		"-loglevel", "error",
-		"-fflags", "+genpts",
-		"-r", fmt.Sprintf("%.3f", fps),
+	}
+	if opts.ForceFrameRate {
+		args = append(args,
+			"-fflags", "+genpts",
+			"-r", fmt.Sprintf("%.3f", opts.FrameRate),
+		)
+	}
+	args = append(args,
 		"-i", input,
+	)
+	if opts.Offset > 0 {
+		args = append(args, "-ss", fmt.Sprintf("%.3f", opts.Offset.Seconds()))
+	}
+	args = append(args,
 		"-map", "0:v:0",
 		"-an",
-		"-t", fmt.Sprintf("%.3f", duration.Seconds()),
-	}
-	switch mode {
+		"-t", fmt.Sprintf("%.3f", opts.Duration.Seconds()),
+	)
+	switch opts.Mode {
 	case ModeCopy:
 		args = append(args, "-c:v", "copy")
 	case ModeExact:
 		args = append(args, "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p")
 	default:
-		return fmt.Errorf("unsupported mode %q", mode)
+		return fmt.Errorf("unsupported mode %q", opts.Mode)
 	}
 	args = append(args, "-movflags", "+faststart", output)
+	return runFFmpeg(ctx, ffmpeg, args)
+}
 
+func concatMP4(ctx context.Context, parts []string, output string) error {
+	if len(parts) == 0 {
+		return errors.New("no trimmed parts to concatenate")
+	}
+	if len(parts) == 1 {
+		return copyFile(output, parts[0])
+	}
+	ffmpeg, err := findFFmpeg()
+	if err != nil {
+		return err
+	}
+	listPath := filepath.Join(filepath.Dir(parts[0]), "concat.txt")
+	if err := writeConcatList(listPath, parts); err != nil {
+		return err
+	}
+	args := []string{
+		"-y",
+		"-hide_banner",
+		"-loglevel", "error",
+		"-f", "concat",
+		"-safe", "0",
+		"-i", listPath,
+		"-c", "copy",
+		"-movflags", "+faststart",
+		output,
+	}
+	return runFFmpeg(ctx, ffmpeg, args)
+}
+
+func runFFmpeg(ctx context.Context, ffmpeg string, args []string) error {
 	cmd := exec.CommandContext(ctx, ffmpeg, args...)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -216,6 +262,37 @@ func renderMP4(ctx context.Context, input string, output string, fps float64, du
 		return fmt.Errorf("ffmpeg failed: %w", err)
 	}
 	return nil
+}
+
+func writeConcatList(path string, parts []string) error {
+	var b strings.Builder
+	for _, part := range parts {
+		abs, err := filepath.Abs(part)
+		if err != nil {
+			return err
+		}
+		b.WriteString("file '")
+		b.WriteString(strings.ReplaceAll(abs, "'", "'\\''"))
+		b.WriteString("'\n")
+	}
+	return os.WriteFile(path, []byte(b.String()), 0o644)
+}
+
+func copyFile(dst string, src string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	if _, err := io.Copy(out, in); err != nil {
+		return err
+	}
+	return out.Close()
 }
 
 func findFFmpeg() (string, error) {
