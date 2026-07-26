@@ -1,6 +1,12 @@
 package dahua
 
-import "testing"
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+)
 
 func TestParseFindNext(t *testing.T) {
 	text := `found=2
@@ -29,5 +35,25 @@ items[1].VideoStream=Main
 	}
 	if segments[0].FilePath != "/mnt/dvr/a.dav" || segments[1].FilePath != "/mnt/dvr/b.dav" {
 		t.Fatalf("unexpected file paths: %#v", segments)
+	}
+}
+
+func TestCurrentTime(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/cgi-bin/global.cgi" || r.URL.Query().Get("action") != "getCurrentTime" {
+			t.Fatalf("unexpected request: %s", r.URL.String())
+		}
+		_, _ = w.Write([]byte("result=2026-07-26 14:30:15\n"))
+	}))
+	defer server.Close()
+
+	client := &Client{baseURLs: []string{server.URL}, http: server.Client()}
+	current, err := client.CurrentTime(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := time.Date(2026, 7, 26, 14, 30, 15, 0, time.Local)
+	if !current.Equal(want) {
+		t.Fatalf("current time = %s, want %s", current, want)
 	}
 }

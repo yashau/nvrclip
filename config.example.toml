@@ -3,6 +3,7 @@ type = "dahua"
 base_url = "172.20.32.8"
 username = "admin"
 password_env = "NVRCLIP_OFFICE_PASSWORD"
+auto_time_offset = true
 frame_rate = 25
 timeout = "5m"
 
@@ -15,6 +16,7 @@ type = "hikvision"
 base_url = "10.10.37.5"
 username = "admin"
 password_env = "NVRCLIP_WAREHOUSE_PASSWORD"
+auto_time_offset = true
 insecure_tls = true
 frame_rate = 25
 timeout = "30m"

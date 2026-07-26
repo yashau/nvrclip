@@ -52,6 +52,25 @@ func New(opts Options) (*Client, error) {
 	}, nil
 }
 
+func (c *Client) CurrentTime(ctx context.Context) (time.Time, error) {
+	var lastErr error
+	for _, baseURL := range c.baseURLs {
+		text, err := c.getTextURL(ctx, endpointPairs(baseURL, "/cgi-bin/global.cgi", []queryPair{
+			{"action", "getCurrentTime"},
+		}))
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		current, err := parseCurrentTime(text)
+		if err == nil {
+			return current, nil
+		}
+		lastErr = err
+	}
+	return time.Time{}, lastErr
+}
+
 func (c *Client) Search(ctx context.Context, channel int, from time.Time, to time.Time) ([]nvr.Segment, error) {
 	var lastErr error
 	for _, baseURL := range c.baseURLs {
@@ -62,6 +81,22 @@ func (c *Client) Search(ctx context.Context, channel int, from time.Time, to tim
 		lastErr = err
 	}
 	return nil, lastErr
+}
+
+func parseCurrentTime(text string) (time.Time, error) {
+	for _, line := range strings.Split(text, "\n") {
+		key, value, ok := strings.Cut(strings.TrimSpace(line), "=")
+		if !ok || key != "result" {
+			continue
+		}
+		value = strings.Trim(strings.TrimSpace(value), `"`)
+		current, err := time.ParseInLocation(timefmt.DahuaLayout, value, time.Local)
+		if err != nil {
+			return time.Time{}, fmt.Errorf("parse dahua current time %q: %w", value, err)
+		}
+		return current, nil
+	}
+	return time.Time{}, fmt.Errorf("dahua getCurrentTime returned no result: %q", text)
 }
 
 func (c *Client) searchBase(ctx context.Context, baseURL string, channel int, from time.Time, to time.Time) ([]nvr.Segment, error) {

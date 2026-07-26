@@ -47,6 +47,42 @@ func New(opts Options) (*Client, error) {
 	}, nil
 }
 
+func (c *Client) CurrentTime(ctx context.Context) (time.Time, error) {
+	var lastErr error
+	for _, baseURL := range c.baseURLs {
+		current, err := c.currentTimeBase(ctx, baseURL)
+		if err == nil {
+			return current, nil
+		}
+		lastErr = err
+	}
+	return time.Time{}, lastErr
+}
+
+func (c *Client) currentTimeBase(ctx context.Context, baseURL string) (time.Time, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/ISAPI/System/time", nil)
+	if err != nil {
+		return time.Time{}, err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return time.Time{}, err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return time.Time{}, fmt.Errorf("hikvision current time failed: %s: %s", resp.Status, strings.TrimSpace(string(data)))
+	}
+	var result deviceTime
+	if err := xml.Unmarshal(data, &result); err != nil {
+		return time.Time{}, err
+	}
+	return parseLocalTime(result.LocalTime)
+}
+
 func (c *Client) Search(ctx context.Context, channel int, from time.Time, to time.Time) ([]nvr.Segment, error) {
 	var lastErr error
 	for _, baseURL := range c.baseURLs {
@@ -209,6 +245,23 @@ func parseHikTime(raw string) (time.Time, error) {
 		return time.ParseInLocation("2006-01-02T15:04:05", raw, time.Local)
 	}
 	return time.Parse(time.RFC3339, raw)
+}
+
+func parseLocalTime(raw string) (time.Time, error) {
+	raw = strings.TrimSpace(raw)
+	if len(raw) < len("2006-01-02T15:04:05") {
+		return time.Time{}, fmt.Errorf("invalid hikvision localTime %q", raw)
+	}
+	wallClock := raw[:len("2006-01-02T15:04:05")]
+	current, err := time.ParseInLocation("2006-01-02T15:04:05", wallClock, time.Local)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parse hikvision localTime %q: %w", raw, err)
+	}
+	return current, nil
+}
+
+type deviceTime struct {
+	LocalTime string `xml:"localTime"`
 }
 
 type cmSearchResult struct {

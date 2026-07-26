@@ -31,6 +31,7 @@ Flags:
   --work-dir dir      temporary work directory
   --keep-temp         keep downloaded temporary files
   --download-only     download NVR chunks but skip ffmpeg output
+  --auto-time-offset compare the NVR clock with the PC and adjust request times
   --mode copy|exact   copy remux or exact re-encode trim (default: copy)
   --format copy|exact alias for --mode
 `
@@ -72,6 +73,7 @@ func runGrab(ctx context.Context, args []string) error {
 	workDir := fs.String("work-dir", "", "temporary work directory")
 	keepTemp := fs.Bool("keep-temp", false, "keep downloaded temporary files")
 	downloadOnly := fs.Bool("download-only", false, "download NVR chunks but skip ffmpeg output")
+	autoTimeOffset := fs.Bool("auto-time-offset", false, "compare the NVR clock with the PC and adjust request times")
 	mode := fs.String("mode", "copy", "copy or exact")
 	format := fs.String("format", "", "alias for --mode; copy or exact")
 	fromRaw := fs.String("from", "", "clip start time")
@@ -118,18 +120,19 @@ func runGrab(ctx context.Context, args []string) error {
 	}
 
 	return runClip(ctx, clipRequest{
-		NVRName:      channel.NVR,
-		NVR:          nvrCfg,
-		Label:        aliasName,
-		Channel:      channel.Number,
-		From:         from,
-		To:           to,
-		OutputDir:    *outDir,
-		WorkDir:      *workDir,
-		KeepTemp:     *keepTemp,
-		DownloadOnly: *downloadOnly,
-		Mode:         selectedMode,
-		FrameRate:    frameRate,
+		NVRName:        channel.NVR,
+		NVR:            nvrCfg,
+		Label:          aliasName,
+		Channel:        channel.Number,
+		From:           from,
+		To:             to,
+		OutputDir:      *outDir,
+		WorkDir:        *workDir,
+		KeepTemp:       *keepTemp,
+		DownloadOnly:   *downloadOnly,
+		AutoTimeOffset: *autoTimeOffset || nvrCfg.AutoTimeOffset,
+		Mode:           selectedMode,
+		FrameRate:      frameRate,
 	})
 }
 
@@ -146,6 +149,7 @@ func runDownload(ctx context.Context, args []string) error {
 	workDir := fs.String("work-dir", "", "temporary work directory")
 	keepTemp := fs.Bool("keep-temp", false, "keep downloaded temporary files")
 	downloadOnly := fs.Bool("download-only", false, "download NVR chunks but skip ffmpeg output")
+	autoTimeOffset := fs.Bool("auto-time-offset", false, "compare the NVR clock with the PC and adjust request times")
 	mode := fs.String("mode", "copy", "copy or exact")
 	format := fs.String("format", "", "alias for --mode; copy or exact")
 	channelRaw := fs.String("channel", "", "channel alias or number")
@@ -220,34 +224,36 @@ func runDownload(ctx context.Context, args []string) error {
 	}
 
 	return runClip(ctx, clipRequest{
-		NVRName:      nvrName,
-		NVR:          nvrCfg,
-		Label:        outputLabel,
-		Channel:      channel.Number,
-		From:         from,
-		To:           to,
-		OutputDir:    *outDir,
-		WorkDir:      *workDir,
-		KeepTemp:     *keepTemp,
-		DownloadOnly: *downloadOnly,
-		Mode:         selectedMode,
-		FrameRate:    frameRate,
+		NVRName:        nvrName,
+		NVR:            nvrCfg,
+		Label:          outputLabel,
+		Channel:        channel.Number,
+		From:           from,
+		To:             to,
+		OutputDir:      *outDir,
+		WorkDir:        *workDir,
+		KeepTemp:       *keepTemp,
+		DownloadOnly:   *downloadOnly,
+		AutoTimeOffset: *autoTimeOffset || nvrCfg.AutoTimeOffset,
+		Mode:           selectedMode,
+		FrameRate:      frameRate,
 	})
 }
 
 type clipRequest struct {
-	NVRName      string
-	NVR          config.NVR
-	Label        string
-	Channel      int
-	From         time.Time
-	To           time.Time
-	OutputDir    string
-	WorkDir      string
-	KeepTemp     bool
-	DownloadOnly bool
-	Mode         string
-	FrameRate    float64
+	NVRName        string
+	NVR            config.NVR
+	Label          string
+	Channel        int
+	From           time.Time
+	To             time.Time
+	OutputDir      string
+	WorkDir        string
+	KeepTemp       bool
+	DownloadOnly   bool
+	AutoTimeOffset bool
+	Mode           string
+	FrameRate      float64
 }
 
 func runClip(ctx context.Context, req clipRequest) error {
@@ -258,6 +264,26 @@ func runClip(ctx context.Context, req clipRequest) error {
 	adapter, err := newAdapter(req.NVR, password)
 	if err != nil {
 		return err
+	}
+	if req.AutoTimeOffset {
+		clock, ok := adapter.(nvr.Clock)
+		if !ok {
+			return fmt.Errorf("NVR %q does not support automatic time offset", req.NVRName)
+		}
+		sample, err := nvr.MeasureClockOffset(ctx, clock, time.Now)
+		if err != nil {
+			return fmt.Errorf("measure NVR %q clock offset: %w", req.NVRName, err)
+		}
+		fmt.Fprintf(
+			os.Stdout,
+			"NVR clock %s, PC clock %s, offset %s; querying %s to %s\n",
+			sample.NVRTime.Format("2006-01-02 15:04:05"),
+			sample.PCTime.Format("2006-01-02 15:04:05"),
+			signedDuration(sample.Offset),
+			req.From.Add(sample.Offset).Format("2006-01-02 15:04:05"),
+			req.To.Add(sample.Offset).Format("2006-01-02 15:04:05"),
+		)
+		adapter = nvr.WithClockOffset(adapter, sample.Offset)
 	}
 	frameRate := req.FrameRate
 	if frameRate == 0 {
@@ -291,6 +317,13 @@ func runClip(ctx context.Context, req clipRequest) error {
 		fmt.Fprintf(os.Stdout, "kept work dir %s\n", abs)
 	}
 	return nil
+}
+
+func signedDuration(value time.Duration) string {
+	if value > 0 {
+		return "+" + value.String()
+	}
+	return value.String()
 }
 
 func newAdapter(nvrCfg config.NVR, password string) (nvr.Adapter, error) {
