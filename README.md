@@ -45,7 +45,7 @@ You can also set `NVRCLIP_FFMPEG` to the full path of `ffmpeg.exe`.
 Build a local binary:
 
 ```powershell
-go run ./tools/build --version 0.1.0
+go run ./tools/build --version 0.2.0
 ```
 
 The build command updates Windows Program Details metadata, regenerates `cmd/nvrclip/resource.syso`, and writes `nvrclip.exe`.
@@ -64,6 +64,7 @@ type = "dahua"
 base_url = "172.20.32.8"
 username = "admin"
 password_env = "NVRCLIP_SHOP_PASSWORD"
+auto_time_offset = true
 frame_rate = 25
 timeout = "5m"
 
@@ -76,6 +77,7 @@ type = "hikvision"
 base_url = "10.10.37.5"
 username = "admin"
 password_env = "NVRCLIP_WAREHOUSE_PASSWORD"
+auto_time_offset = true
 insecure_tls = true
 frame_rate = 25
 timeout = "30m"
@@ -102,6 +104,39 @@ Set env vars in PowerShell:
 ```powershell
 $env:NVRCLIP_SHOP_PASSWORD = "your-password"
 ```
+
+### Automatic NVR clock offset
+
+If the PC clock is accurate but the NVR clock may drift, enable automatic time
+offset correction in the NVR config:
+
+```toml
+[shop]
+type = "dahua"
+base_url = "172.20.32.8"
+username = "admin"
+password_env = "NVRCLIP_SHOP_PASSWORD"
+auto_time_offset = true
+```
+
+You can also enable it for one command:
+
+```powershell
+.\nvrclip.exe download shop --channel 1 --from "2026-05-05 14:00" --to "2026-05-05 14:10" --auto-time-offset
+```
+
+At the start of the command, nvrclip reads the NVR wall clock and compares it
+with the midpoint of the request to reduce network-latency error. It calculates
+the offset as `NVR time - PC time` and applies that offset only when talking to
+the NVR.
+
+For example, if the NVR is 1 hour slow, a user request for `14:00` is sent to
+the NVR as `13:00`. Segment timestamps are translated back before trimming, and
+the output filename still uses the requested `14:00` time.
+
+This feature does not change the NVR clock. It assumes the PC and NVR are meant
+to use the same local wall-clock time. If nvrclip cannot read the NVR time, the
+command fails instead of silently downloading an unadjusted clip.
 
 ## Usage
 

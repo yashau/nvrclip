@@ -1,6 +1,10 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestResolveChannelNumber(t *testing.T) {
 	cfg := Config{NVRs: map[string]NVR{
@@ -12,6 +16,27 @@ func TestResolveChannelNumber(t *testing.T) {
 	}
 	if channel.Number != 1 || channel.NVR != "office" || channel.Name != "front-door" {
 		t.Fatalf("unexpected result: %#v", channel)
+	}
+}
+
+func TestLoadAutoTimeOffset(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nvrclip.toml")
+	content := `[office]
+type = "dahua"
+base_url = "192.0.2.1"
+username = "admin"
+password = "test"
+auto_time_offset = true
+`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.NVRs["office"].AutoTimeOffset {
+		t.Fatal("auto_time_offset was not loaded")
 	}
 }
 

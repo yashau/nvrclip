@@ -1,6 +1,9 @@
 package hikvision
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +16,29 @@ func TestParseHikTimeKeepsWallClockForZ(t *testing.T) {
 	}
 	if got.Hour() != 12 || got.Minute() != 20 {
 		t.Fatalf("time = %s, want local wall-clock 12:20", got)
+	}
+}
+
+func TestCurrentTime(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/ISAPI/System/time" {
+			t.Fatalf("unexpected request: %s", r.URL.String())
+		}
+		_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>
+<Time xmlns="http://www.isapi.org/ver20/XMLSchema">
+  <localTime>2026-07-26T14:30:15+05:00</localTime>
+</Time>`))
+	}))
+	defer server.Close()
+
+	client := &Client{baseURLs: []string{server.URL}, http: server.Client()}
+	current, err := client.CurrentTime(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := time.Date(2026, 7, 26, 14, 30, 15, 0, time.Local)
+	if !current.Equal(want) {
+		t.Fatalf("current time = %s, want %s", current, want)
 	}
 }
 

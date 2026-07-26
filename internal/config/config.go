@@ -15,17 +15,18 @@ type Config struct {
 }
 
 type NVR struct {
-	Name        string
-	Type        string             `toml:"type"`
-	BaseURL     string             `toml:"base_url"`
-	Username    string             `toml:"username"`
-	Password    string             `toml:"password"`
-	PasswordEnv string             `toml:"password_env"`
-	InsecureTLS bool               `toml:"insecure_tls"`
-	Timeout     string             `toml:"timeout"`
-	FrameRate   float64            `toml:"frame_rate"`
-	Channels    map[string]string  `toml:"channels"`
-	Options     map[string]unknown `toml:"-"`
+	Name           string
+	Type           string             `toml:"type"`
+	BaseURL        string             `toml:"base_url"`
+	Username       string             `toml:"username"`
+	Password       string             `toml:"password"`
+	PasswordEnv    string             `toml:"password_env"`
+	InsecureTLS    bool               `toml:"insecure_tls"`
+	AutoTimeOffset bool               `toml:"auto_time_offset"`
+	Timeout        string             `toml:"timeout"`
+	FrameRate      float64            `toml:"frame_rate"`
+	Channels       map[string]string  `toml:"channels"`
+	Options        map[string]unknown `toml:"-"`
 }
 
 type unknown struct{}
