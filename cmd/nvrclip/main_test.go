@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"testing"
+	"time"
 )
 
 func TestResolveModeFlagUsesFormatAlias(t *testing.T) {
@@ -18,6 +19,30 @@ func TestResolveModeFlagUsesFormatAlias(t *testing.T) {
 	}
 	if got != "exact" {
 		t.Fatalf("mode = %q, want exact", got)
+	}
+}
+
+func TestResolveTimeRangeAround(t *testing.T) {
+	from, to, err := resolveTimeRange("", "", "2026-05-20 14:00", 120)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantFrom := time.Date(2026, 5, 20, 13, 0, 0, 0, time.Local)
+	wantTo := time.Date(2026, 5, 20, 15, 0, 0, 0, time.Local)
+	if !from.Equal(wantFrom) || !to.Equal(wantTo) {
+		t.Fatalf("range = %s - %s, want %s - %s", from, to, wantFrom, wantTo)
+	}
+}
+
+func TestResolveTimeRangeRejectsMixedForms(t *testing.T) {
+	_, _, err := resolveTimeRange(
+		"2026-05-20 13:00",
+		"2026-05-20 15:00",
+		"2026-05-20 14:00",
+		120,
+	)
+	if err == nil {
+		t.Fatal("expected mixed time forms to fail")
 	}
 }
 

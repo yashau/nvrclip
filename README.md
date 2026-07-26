@@ -45,7 +45,7 @@ You can also set `NVRCLIP_FFMPEG` to the full path of `ffmpeg.exe`.
 Build a local binary:
 
 ```powershell
-go run ./tools/build --version 0.2.0
+go run ./tools/build --version 0.2.1
 ```
 
 The build command updates Windows Program Details metadata, regenerates `cmd/nvrclip/resource.syso`, and writes `nvrclip.exe`.
@@ -54,7 +54,7 @@ The build command updates Windows Program Details metadata, regenerates `cmd/nvr
 
 Create `nvrclip.toml` in the working directory.
 
-`base_url` can be just an IP address or hostname. nvrclip tries HTTPS first, then HTTP. If your NVR uses a self-signed HTTPS certificate, set `insecure_tls = true`.
+`base_url` can be just an IP address or hostname. nvrclip tries HTTPS first, then HTTP. If your NVR uses a self-signed HTTPS certificate, set `insecure_tls = true`. This option only disables TLS certificate verification; it does not disable HTTPS. To force plain HTTP, include it explicitly, for example `base_url = "http://172.20.32.8"`.
 
 Channels are 1-based, matching the NVR UI.
 
@@ -142,10 +142,16 @@ command fails instead of silently downloading an unadjusted clip.
 
 ### Command forms
 
-`grab` is the shorthand form. Use it when the channel alias is globally unique across all configured NVRs and you already know the exact start and end times:
+`grab` is the shorthand form. Use it when the channel alias is globally unique across all configured NVRs:
 
 ```powershell
 .\nvrclip.exe grab "shop cashier" --from "2026-05-05 14:00" --to "2026-05-05 14:10"
+```
+
+It also accepts a timestamp-centered range:
+
+```powershell
+.\nvrclip.exe grab "shop cashier" --around "2026-05-05 14:05" --minutes 10
 ```
 
 This is equivalent to resolving `"shop cashier"` to its configured NVR and channel, then running the same clip export pipeline as `download`.
@@ -174,9 +180,10 @@ Use exact start and end times with either command:
 .\nvrclip.exe download warehouse --channel office --from "2026-05-05 14:00" --to "2026-05-05 14:10"
 ```
 
-Use `--around` with `--minutes` on `download` when you want a clip centered on a timestamp:
+Use `--around` with `--minutes` on either command when you want a clip centered on a timestamp:
 
 ```powershell
+.\nvrclip.exe grab "shop cashier" --around "2026-05-05 14:05" --minutes 10
 .\nvrclip.exe download shop --channel front-door --around "2026-05-05 14:05" --minutes 10
 ```
 
@@ -219,7 +226,8 @@ Download only, without producing a final MP4:
 Dahua:
 
 - Searches recording segments through raw CGI.
-- Downloads bounded overlapping time ranges where supported.
+- Prefers the indexed recording file so the stored codec and resolution are preserved.
+- Falls back to a bounded CGI export on firmware that does not expose indexed files.
 - Trims/remuxes with FFmpeg.
 
 Hikvision:
