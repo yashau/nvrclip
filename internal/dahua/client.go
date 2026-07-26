@@ -139,6 +139,7 @@ func (c *Client) searchBase(ctx context.Context, baseURL string, channel int, fr
 		}
 	}
 
+	segments = preferMainStream(segments)
 	sort.Slice(segments, func(i, j int) bool {
 		return segments[i].Start.Before(segments[j].Start)
 	})
@@ -164,6 +165,34 @@ func (c *Client) Download(ctx context.Context, req nvr.DownloadRequest) (nvr.Dow
 }
 
 func (c *Client) downloadBase(ctx context.Context, baseURL string, req nvr.DownloadRequest) (nvr.DownloadResult, error) {
+	if req.Segment.FilePath != "" {
+		result, err := c.downloadIndexedFile(ctx, baseURL, req)
+		if err == nil {
+			return result, nil
+		}
+		if req.Logf != nil {
+			req.Logf("dahua indexed download failed, retrying bounded export error=%v", err)
+		}
+	}
+	return c.downloadBounded(ctx, baseURL, req)
+}
+
+func (c *Client) downloadIndexedFile(ctx context.Context, baseURL string, req nvr.DownloadRequest) (nvr.DownloadResult, error) {
+	downloadURL := baseURL + "/cgi-bin/RPC_Loadfile" + req.Segment.FilePath
+	if req.Logf != nil {
+		req.Logf("dahua indexed download url=%s", downloadURL)
+	}
+	if err := c.downloadURL(ctx, downloadURL, req.Path, req.Progress, "indexed"); err != nil {
+		return nvr.DownloadResult{}, err
+	}
+	return nvr.DownloadResult{
+		From:           req.Segment.Start,
+		To:             req.Segment.End,
+		ForceFrameRate: true,
+	}, nil
+}
+
+func (c *Client) downloadBounded(ctx context.Context, baseURL string, req nvr.DownloadRequest) (nvr.DownloadResult, error) {
 	downloadURL := endpointPairs(baseURL, "/cgi-bin/loadfile.cgi", []queryPair{
 		{"action", "startLoad"},
 		{"channel", strconv.Itoa(req.Channel)},
@@ -172,45 +201,58 @@ func (c *Client) downloadBase(ctx context.Context, baseURL string, req nvr.Downl
 		{"subtype", "0"},
 	})
 	if req.Logf != nil {
-		req.Logf("dahua download url=%s", downloadURL)
+		req.Logf("dahua bounded download url=%s", downloadURL)
 	}
+	if err := c.downloadURL(ctx, downloadURL, req.Path, req.Progress, "bounded"); err != nil {
+		return nvr.DownloadResult{}, err
+	}
+	return nvr.DownloadResult{From: req.From, To: req.To, ForceFrameRate: true}, nil
+}
+
+func (c *Client) downloadURL(
+	ctx context.Context,
+	downloadURL string,
+	path string,
+	progress func(nvr.Progress),
+	kind string,
+) error {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
 	if err != nil {
-		return nvr.DownloadResult{}, err
+		return err
 	}
 	resp, err := c.http.Do(httpReq)
 	if err != nil {
-		return nvr.DownloadResult{}, err
+		return err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nvr.DownloadResult{}, fmt.Errorf("dahua download failed: %s: %s", resp.Status, strings.TrimSpace(string(body)))
+		return fmt.Errorf("dahua %s download failed: %s: %s", kind, resp.Status, strings.TrimSpace(string(body)))
 	}
 
-	out, err := os.Create(req.Path)
+	out, err := os.Create(path)
 	if err != nil {
-		return nvr.DownloadResult{}, err
+		return err
 	}
 	defer out.Close()
 	reader := io.Reader(resp.Body)
-	if req.Progress != nil {
+	if progress != nil {
 		reader = &progressReader{
 			reader:   resp.Body,
 			total:    resp.ContentLength,
-			progress: req.Progress,
+			progress: progress,
 		}
 	}
 	if _, err := io.Copy(out, reader); err != nil {
-		return nvr.DownloadResult{}, err
+		return err
 	}
-	if req.Progress != nil {
+	if progress != nil {
 		info, err := out.Stat()
 		if err == nil {
-			req.Progress(nvr.Progress{Downloaded: info.Size(), Total: resp.ContentLength})
+			progress(nvr.Progress{Downloaded: info.Size(), Total: resp.ContentLength})
 		}
 	}
-	return nvr.DownloadResult{From: req.From, To: req.To, ForceFrameRate: true}, nil
+	return nil
 }
 
 func (c *Client) createFinder(ctx context.Context, baseURL string) (string, error) {
@@ -367,6 +409,19 @@ func parseSegment(values map[string]string) (nvr.Segment, error) {
 		Type:     values["Type"],
 		Stream:   values["VideoStream"],
 	}, nil
+}
+
+func preferMainStream(segments []nvr.Segment) []nvr.Segment {
+	main := make([]nvr.Segment, 0, len(segments))
+	for _, segment := range segments {
+		if strings.EqualFold(segment.Stream, "Main") {
+			main = append(main, segment)
+		}
+	}
+	if len(main) > 0 {
+		return main
+	}
+	return segments
 }
 
 type progressReader struct {

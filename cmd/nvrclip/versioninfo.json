@@ -3,13 +3,13 @@
     "FileVersion": {
       "Major": 0,
       "Minor": 2,
-      "Patch": 0,
+      "Patch": 1,
       "Build": 0
     },
     "ProductVersion": {
       "Major": 0,
       "Minor": 2,
-      "Patch": 0,
+      "Patch": 1,
       "Build": 0
     },
     "FileFlagsMask": "3f",
@@ -22,14 +22,14 @@
     "Comments": "Exports exact MP4 clips from NVR recordings.",
     "CompanyName": "Ibrahim Yashau",
     "FileDescription": "nvrclip NVR clip exporter",
-    "FileVersion": "0.2.0",
+    "FileVersion": "0.2.1",
     "InternalName": "nvrclip",
     "LegalCopyright": "Copyright (c) 2026 Ibrahim Yashau",
     "LegalTrademarks": "",
     "OriginalFilename": "nvrclip.exe",
     "PrivateBuild": "",
     "ProductName": "nvrclip",
-    "ProductVersion": "0.2.0",
+    "ProductVersion": "0.2.1",
     "SpecialBuild": ""
   },
   "VarFileInfo": {

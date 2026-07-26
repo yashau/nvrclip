@@ -22,6 +22,7 @@ const usage = `nvrclip exports exact clips from NVR recordings.
 
 Usage:
   nvrclip grab <channel alias> --from "2026-05-06 14:50" --to "2026-05-06 15:20" [flags]
+  nvrclip grab <channel alias> --around "2026-05-06 15:05" --minutes 30 [flags]
   nvrclip download <nvr> --channel front-door --around "2026-05-05 14:05" --minutes 10 [flags]
   nvrclip download <nvr> --channel 1 --from "2026-05-05 14:00" --to "2026-05-05 14:10" [flags]
 
@@ -78,6 +79,8 @@ func runGrab(ctx context.Context, args []string) error {
 	format := fs.String("format", "", "alias for --mode; copy or exact")
 	fromRaw := fs.String("from", "", "clip start time")
 	toRaw := fs.String("to", "", "clip end time")
+	aroundRaw := fs.String("around", "", "center time")
+	minutes := fs.Float64("minutes", 0, "minutes around center time")
 	if err := fs.Parse(flagArgs); err != nil {
 		return err
 	}
@@ -85,20 +88,9 @@ func runGrab(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	if *fromRaw == "" || *toRaw == "" {
-		return errors.New("grab needs --from and --to")
-	}
-
-	from, err := parseLocalTime(*fromRaw)
+	from, to, err := resolveTimeRange(*fromRaw, *toRaw, *aroundRaw, *minutes)
 	if err != nil {
-		return fmt.Errorf("parse --from: %w", err)
-	}
-	to, err := parseLocalTime(*toRaw)
-	if err != nil {
-		return fmt.Errorf("parse --to: %w", err)
-	}
-	if !to.After(from) {
-		return errors.New("--to must be after --from")
+		return err
 	}
 
 	cfg, err := config.Load(*configPath)
@@ -168,34 +160,9 @@ func runDownload(ctx context.Context, args []string) error {
 		return errors.New("download needs --channel")
 	}
 
-	var from, to time.Time
-	if *aroundRaw != "" {
-		if *minutes <= 0 {
-			return errors.New("--around needs --minutes greater than 0")
-		}
-		around, err := parseLocalTime(*aroundRaw)
-		if err != nil {
-			return fmt.Errorf("parse --around: %w", err)
-		}
-		half := time.Duration((*minutes * float64(time.Minute)) / 2)
-		from = around.Add(-half)
-		to = around.Add(half)
-	} else {
-		if *fromRaw == "" || *toRaw == "" {
-			return errors.New("download needs either --around with --minutes, or --from and --to")
-		}
-		var err error
-		from, err = parseLocalTime(*fromRaw)
-		if err != nil {
-			return fmt.Errorf("parse --from: %w", err)
-		}
-		to, err = parseLocalTime(*toRaw)
-		if err != nil {
-			return fmt.Errorf("parse --to: %w", err)
-		}
-	}
-	if !to.After(from) {
-		return errors.New("end time must be after start time")
+	from, to, err := resolveTimeRange(*fromRaw, *toRaw, *aroundRaw, *minutes)
+	if err != nil {
+		return err
 	}
 
 	cfg, err := config.Load(*configPath)
@@ -324,6 +291,46 @@ func signedDuration(value time.Duration) string {
 		return "+" + value.String()
 	}
 	return value.String()
+}
+
+func resolveTimeRange(
+	fromRaw string,
+	toRaw string,
+	aroundRaw string,
+	minutes float64,
+) (time.Time, time.Time, error) {
+	if aroundRaw != "" {
+		if fromRaw != "" || toRaw != "" {
+			return time.Time{}, time.Time{}, errors.New("--around cannot be combined with --from or --to")
+		}
+		if minutes <= 0 {
+			return time.Time{}, time.Time{}, errors.New("--around needs --minutes greater than 0")
+		}
+		around, err := parseLocalTime(aroundRaw)
+		if err != nil {
+			return time.Time{}, time.Time{}, fmt.Errorf("parse --around: %w", err)
+		}
+		half := time.Duration((minutes * float64(time.Minute)) / 2)
+		return around.Add(-half), around.Add(half), nil
+	}
+	if minutes != 0 {
+		return time.Time{}, time.Time{}, errors.New("--minutes needs --around")
+	}
+	if fromRaw == "" || toRaw == "" {
+		return time.Time{}, time.Time{}, errors.New("needs either --around with --minutes, or --from and --to")
+	}
+	from, err := parseLocalTime(fromRaw)
+	if err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("parse --from: %w", err)
+	}
+	to, err := parseLocalTime(toRaw)
+	if err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("parse --to: %w", err)
+	}
+	if !to.After(from) {
+		return time.Time{}, time.Time{}, errors.New("end time must be after start time")
+	}
+	return from, to, nil
 }
 
 func newAdapter(nvrCfg config.NVR, password string) (nvr.Adapter, error) {
