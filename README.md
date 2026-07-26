@@ -45,7 +45,7 @@ You can also set `NVRCLIP_FFMPEG` to the full path of `ffmpeg.exe`.
 Build a local binary:
 
 ```powershell
-go run ./tools/build --version 0.2.1
+go run ./tools/build --version 0.2.2
 ```
 
 The build command updates Windows Program Details metadata, regenerates `cmd/nvrclip/resource.syso`, and writes `nvrclip.exe`.
@@ -227,6 +227,7 @@ Dahua:
 
 - Searches recording segments through raw CGI.
 - Prefers the indexed recording file so the stored codec and resolution are preserved.
+- Detects and removes stale indexed-file preambles at timestamp discontinuities, starting from the first valid keyframe.
 - Falls back to a bounded CGI export on firmware that does not expose indexed files.
 - Trims/remuxes with FFmpeg.
 

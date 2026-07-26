@@ -85,6 +85,9 @@ func TestDownloadUsesIndexedRecordingFile(t *testing.T) {
 	if !result.From.Equal(start) || !result.To.Equal(start.Add(time.Hour)) {
 		t.Fatalf("download range = %s - %s", result.From, result.To)
 	}
+	if !result.DiscardStalePreamble {
+		t.Fatal("indexed recording did not request stale preamble removal")
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -132,6 +135,9 @@ func TestDownloadFallsBackToBoundedExport(t *testing.T) {
 	}
 	if !result.From.Equal(from) || !result.To.Equal(to) {
 		t.Fatalf("download range = %s - %s", result.From, result.To)
+	}
+	if result.DiscardStalePreamble {
+		t.Fatal("bounded export unexpectedly requested stale preamble removal")
 	}
 }
 

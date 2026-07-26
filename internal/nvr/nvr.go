@@ -25,9 +25,10 @@ type DownloadRequest struct {
 }
 
 type DownloadResult struct {
-	From           time.Time
-	To             time.Time
-	ForceFrameRate bool
+	From                 time.Time
+	To                   time.Time
+	ForceFrameRate       bool
+	DiscardStalePreamble bool
 }
 
 type Progress struct {

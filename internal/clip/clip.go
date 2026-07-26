@@ -162,8 +162,32 @@ func Run(ctx context.Context, job Job) (Result, error) {
 			offset = 0
 		}
 		duration := ov.To.Sub(ov.From)
+		var skipInitialBytes int64
+		if download.DiscardStalePreamble {
+			skip, found, probeErr := probeStalePreamble(ctx, rawPart)
+			switch {
+			case probeErr != nil:
+				log("part %d/%d stale preamble probe failed, continuing without byte skip: %v", i+1, len(overlaps), probeErr)
+			case found && skip.Bytes >= info.Size():
+				log("part %d/%d stale preamble byte skip ignored because position=%d size=%d", i+1, len(overlaps), skip.Bytes, info.Size())
+			case found:
+				skipInitialBytes = skip.Bytes
+				adjustedOffset, adjustedDuration, missingLead := adjustTrimForPreamble(offset, duration, skip.Advance)
+				log("part %d/%d stale preamble discarded bytes=%d timestamp_jump=%s keyframe_advance=%s offset=%s adjusted_offset=%s duration=%s adjusted_duration=%s missing_lead=%s",
+					i+1, len(overlaps), skip.Bytes, skip.TimestampJump, skip.Advance, offset, adjustedOffset, duration, adjustedDuration, missingLead)
+				offset = adjustedOffset
+				duration = adjustedDuration
+			default:
+				log("part %d/%d stale preamble not detected", i+1, len(overlaps))
+			}
+		}
+		if duration <= 0 {
+			err := fmt.Errorf("no decodable video remains for %s after discarding the stale recording preamble", humanRange(ov.From, ov.To))
+			log("part %d/%d trim range error: %v", i+1, len(overlaps), err)
+			return Result{WorkDir: workDir, LogPath: logger.Path}, err
+		}
 		if job.Mode == ModeExact && (exactWidth == 0 || exactHeight == 0) {
-			width, height, err := probeVideoDimensions(ctx, rawPart, log)
+			width, height, err := probeVideoDimensions(ctx, rawPart, skipInitialBytes, log)
 			if err != nil {
 				log("exact normalize probe failed, continuing without fixed dimensions: %v", err)
 			} else {
@@ -174,14 +198,15 @@ func Run(ctx context.Context, job Job) (Result, error) {
 		}
 		log("part %d/%d trim start raw=%q trimmed=%q offset=%s duration=%s", i+1, len(overlaps), rawPart, trimmedPart, offset, duration)
 		if err := renderPartMP4(ctx, rawPart, trimmedPart, renderOptions{
-			Offset:         offset,
-			Duration:       duration,
-			FrameRate:      job.FrameRate,
-			Mode:           job.Mode,
-			ForceFrameRate: download.ForceFrameRate,
-			TargetWidth:    exactWidth,
-			TargetHeight:   exactHeight,
-			Logf:           log,
+			Offset:           offset,
+			Duration:         duration,
+			FrameRate:        job.FrameRate,
+			Mode:             job.Mode,
+			ForceFrameRate:   download.ForceFrameRate,
+			SkipInitialBytes: skipInitialBytes,
+			TargetWidth:      exactWidth,
+			TargetHeight:     exactHeight,
+			Logf:             log,
 		}); err != nil {
 			log("part %d/%d trim error: %v", i+1, len(overlaps), err)
 			return Result{WorkDir: workDir, LogPath: logger.Path}, err
@@ -230,15 +255,16 @@ func overlappingSegments(segments []nvr.Segment, from time.Time, to time.Time) [
 }
 
 type renderOptions struct {
-	Offset         time.Duration
-	Duration       time.Duration
-	FrameRate      float64
-	Mode           Mode
-	ForceFrameRate bool
-	Logf           func(string, ...any)
-	InputFormat    string
-	TargetWidth    int
-	TargetHeight   int
+	Offset           time.Duration
+	Duration         time.Duration
+	FrameRate        float64
+	Mode             Mode
+	ForceFrameRate   bool
+	SkipInitialBytes int64
+	Logf             func(string, ...any)
+	InputFormat      string
+	TargetWidth      int
+	TargetHeight     int
 }
 
 func renderPartMP4(ctx context.Context, input string, output string, opts renderOptions) error {
@@ -265,6 +291,9 @@ func renderPartMP4Once(ctx context.Context, input string, output string, opts re
 		"-y",
 		"-hide_banner",
 		"-loglevel", "error",
+	}
+	if opts.SkipInitialBytes > 0 {
+		args = append(args, "-skip_initial_bytes", strconv.FormatInt(opts.SkipInitialBytes, 10))
 	}
 	if opts.ForceFrameRate {
 		args = append(args,
@@ -308,27 +337,30 @@ func renderPartMP4Once(ctx context.Context, input string, output string, opts re
 	return runFFmpeg(ctx, ffmpeg, args, opts.Logf)
 }
 
-func probeVideoDimensions(ctx context.Context, input string, logf func(string, ...any)) (int, int, error) {
-	width, height, err := probeVideoDimensionsOnce(ctx, input, "")
+func probeVideoDimensions(ctx context.Context, input string, skipInitialBytes int64, logf func(string, ...any)) (int, int, error) {
+	width, height, err := probeVideoDimensionsOnce(ctx, input, "", skipInitialBytes)
 	if err == nil {
 		return width, height, nil
 	}
 	if logf != nil {
 		logf("ffprobe normal input failed, retrying as dhav: %v", err)
 	}
-	width, height, retryErr := probeVideoDimensionsOnce(ctx, input, "dhav")
+	width, height, retryErr := probeVideoDimensionsOnce(ctx, input, "dhav", skipInitialBytes)
 	if retryErr != nil {
 		return 0, 0, fmt.Errorf("%w; dhav retry failed: %v", err, retryErr)
 	}
 	return width, height, nil
 }
 
-func probeVideoDimensionsOnce(ctx context.Context, input string, inputFormat string) (int, int, error) {
+func probeVideoDimensionsOnce(ctx context.Context, input string, inputFormat string, skipInitialBytes int64) (int, int, error) {
 	ffprobe, err := findFFprobe()
 	if err != nil {
 		return 0, 0, err
 	}
 	args := []string{"-v", "error"}
+	if skipInitialBytes > 0 {
+		args = append(args, "-skip_initial_bytes", strconv.FormatInt(skipInitialBytes, 10))
+	}
 	if inputFormat != "" {
 		args = append(args, "-f", inputFormat)
 	}

@@ -186,9 +186,10 @@ func (c *Client) downloadIndexedFile(ctx context.Context, baseURL string, req nv
 		return nvr.DownloadResult{}, err
 	}
 	return nvr.DownloadResult{
-		From:           req.Segment.Start,
-		To:             req.Segment.End,
-		ForceFrameRate: true,
+		From:                 req.Segment.Start,
+		To:                   req.Segment.End,
+		ForceFrameRate:       true,
+		DiscardStalePreamble: true,
 	}, nil
 }
 
