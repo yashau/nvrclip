@@ -32,7 +32,7 @@ Flags:
   --work-dir dir      temporary work directory
   --keep-temp         keep downloaded temporary files
   --download-only     download NVR chunks but skip ffmpeg output
-  --auto-time-offset compare the NVR clock with the PC and adjust request times
+  --no-time-offset    trust the NVR clock instead of correcting against the PC
   --mode copy|exact   copy remux or exact re-encode trim (default: copy)
   --format copy|exact alias for --mode
 `
@@ -74,7 +74,9 @@ func runGrab(ctx context.Context, args []string) error {
 	workDir := fs.String("work-dir", "", "temporary work directory")
 	keepTemp := fs.Bool("keep-temp", false, "keep downloaded temporary files")
 	downloadOnly := fs.Bool("download-only", false, "download NVR chunks but skip ffmpeg output")
-	autoTimeOffset := fs.Bool("auto-time-offset", false, "compare the NVR clock with the PC and adjust request times")
+	autoTimeOffset := fs.Bool("auto-time-offset", false, "deprecated: the NVR clock is always compared with the PC")
+	noTimeOffset := fs.Bool("no-time-offset", false, "send request times to the NVR unchanged, trusting its clock")
+	_ = autoTimeOffset
 	mode := fs.String("mode", "copy", "copy or exact")
 	format := fs.String("format", "", "alias for --mode; copy or exact")
 	fromRaw := fs.String("from", "", "clip start time")
@@ -122,7 +124,7 @@ func runGrab(ctx context.Context, args []string) error {
 		WorkDir:        *workDir,
 		KeepTemp:       *keepTemp,
 		DownloadOnly:   *downloadOnly,
-		AutoTimeOffset: *autoTimeOffset || nvrCfg.AutoTimeOffset,
+		AutoTimeOffset: resolveTimeOffset(*noTimeOffset, nvrCfg),
 		Mode:           selectedMode,
 		FrameRate:      frameRate,
 	})
@@ -141,7 +143,9 @@ func runDownload(ctx context.Context, args []string) error {
 	workDir := fs.String("work-dir", "", "temporary work directory")
 	keepTemp := fs.Bool("keep-temp", false, "keep downloaded temporary files")
 	downloadOnly := fs.Bool("download-only", false, "download NVR chunks but skip ffmpeg output")
-	autoTimeOffset := fs.Bool("auto-time-offset", false, "compare the NVR clock with the PC and adjust request times")
+	autoTimeOffset := fs.Bool("auto-time-offset", false, "deprecated: the NVR clock is always compared with the PC")
+	noTimeOffset := fs.Bool("no-time-offset", false, "send request times to the NVR unchanged, trusting its clock")
+	_ = autoTimeOffset
 	mode := fs.String("mode", "copy", "copy or exact")
 	format := fs.String("format", "", "alias for --mode; copy or exact")
 	channelRaw := fs.String("channel", "", "channel alias or number")
@@ -201,7 +205,7 @@ func runDownload(ctx context.Context, args []string) error {
 		WorkDir:        *workDir,
 		KeepTemp:       *keepTemp,
 		DownloadOnly:   *downloadOnly,
-		AutoTimeOffset: *autoTimeOffset || nvrCfg.AutoTimeOffset,
+		AutoTimeOffset: resolveTimeOffset(*noTimeOffset, nvrCfg),
 		Mode:           selectedMode,
 		FrameRate:      frameRate,
 	})
@@ -235,11 +239,12 @@ func runClip(ctx context.Context, req clipRequest) error {
 	if req.AutoTimeOffset {
 		clock, ok := adapter.(nvr.Clock)
 		if !ok {
-			return fmt.Errorf("NVR %q does not support automatic time offset", req.NVRName)
+			return fmt.Errorf("NVR %q cannot report its clock; pass --no-time-offset to send times unchanged", req.NVRName)
 		}
 		sample, err := nvr.MeasureClockOffset(ctx, clock, time.Now)
 		if err != nil {
-			return fmt.Errorf("measure NVR %q clock offset: %w", req.NVRName, err)
+			// Guessing here would quietly hand back footage from the wrong time.
+			return fmt.Errorf("measure NVR %q clock offset: %w; pass --no-time-offset to send times unchanged", req.NVRName, err)
 		}
 		fmt.Fprintf(
 			os.Stdout,
@@ -367,6 +372,15 @@ func splitAliasAndFlags(args []string) ([]string, []string) {
 
 func parseChannelNumber(raw string) (int, error) {
 	return strconv.Atoi(raw)
+}
+
+// resolveTimeOffset keeps the correction on by default. _ marks the deprecated
+// opt-in flag as still accepted so existing commands keep working.
+func resolveTimeOffset(noTimeOffset bool, nvrCfg config.NVR) bool {
+	if noTimeOffset {
+		return false
+	}
+	return nvrCfg.TimeOffsetEnabled()
 }
 
 func resolveModeFlag(fs *flag.FlagSet, modeValue string, formatValue string) (string, error) {

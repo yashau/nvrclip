@@ -162,7 +162,10 @@ func Run(ctx context.Context, job Job) (Result, error) {
 			offset = 0
 		}
 		duration := ov.To.Sub(ov.From)
+		forceFrameRate := download.ForceFrameRate
 		var skipInitialBytes int64
+		var preambleAdvance time.Duration
+		preambleFound := false
 		if download.DiscardStalePreamble {
 			skip, found, probeErr := probeStalePreamble(ctx, rawPart)
 			switch {
@@ -172,14 +175,36 @@ func Run(ctx context.Context, job Job) (Result, error) {
 				log("part %d/%d stale preamble byte skip ignored because position=%d size=%d", i+1, len(overlaps), skip.Bytes, info.Size())
 			case found:
 				skipInitialBytes = skip.Bytes
-				adjustedOffset, adjustedDuration, missingLead := adjustTrimForPreamble(offset, duration, skip.Advance)
-				log("part %d/%d stale preamble discarded bytes=%d timestamp_jump=%s keyframe_advance=%s offset=%s adjusted_offset=%s duration=%s adjusted_duration=%s missing_lead=%s",
-					i+1, len(overlaps), skip.Bytes, skip.TimestampJump, skip.Advance, offset, adjustedOffset, duration, adjustedDuration, missingLead)
-				offset = adjustedOffset
-				duration = adjustedDuration
+				preambleAdvance = skip.Advance
+				preambleFound = true
+				log("part %d/%d stale preamble discarded bytes=%d timestamp_jump=%s keyframe_advance=%s",
+					i+1, len(overlaps), skip.Bytes, skip.TimestampJump, skip.Advance)
 			default:
 				log("part %d/%d stale preamble not detected", i+1, len(overlaps))
 			}
+		}
+		if download.SeekByMediaTimeline {
+			// Seeking relies on the file's own timeline, so check it is coherent
+			// rather than comparing it with any recorder clock.
+			usable, probeErr := probeUsableTimestamps(ctx, rawPart, skipInitialBytes)
+			if probeErr != nil {
+				log("part %d/%d timestamp scan failed: %v", i+1, len(overlaps), probeErr)
+			}
+			if !usable {
+				// Nothing coherent to seek through, so fall back to rebuilding
+				// timestamps at the configured frame rate.
+				forceFrameRate = true
+				log("part %d/%d no usable media timeline, rebuilding timestamps at %.3f fps", i+1, len(overlaps), job.FrameRate)
+			} else {
+				log("part %d/%d seeking on the recording's own timeline", i+1, len(overlaps))
+			}
+		}
+		if preambleFound {
+			adjustedOffset, adjustedDuration, missingLead := adjustTrimForPreamble(offset, duration, preambleAdvance)
+			log("part %d/%d preamble trim offset=%s adjusted_offset=%s duration=%s adjusted_duration=%s missing_lead=%s",
+				i+1, len(overlaps), offset, adjustedOffset, duration, adjustedDuration, missingLead)
+			offset = adjustedOffset
+			duration = adjustedDuration
 		}
 		if duration <= 0 {
 			err := fmt.Errorf("no decodable video remains for %s after discarding the stale recording preamble", humanRange(ov.From, ov.To))
@@ -202,7 +227,7 @@ func Run(ctx context.Context, job Job) (Result, error) {
 			Duration:         duration,
 			FrameRate:        job.FrameRate,
 			Mode:             job.Mode,
-			ForceFrameRate:   download.ForceFrameRate,
+			ForceFrameRate:   forceFrameRate,
 			SkipInitialBytes: skipInitialBytes,
 			TargetWidth:      exactWidth,
 			TargetHeight:     exactHeight,
@@ -540,10 +565,16 @@ func evenDimension(n int) int {
 }
 
 func outputName(alias string, from time.Time, to time.Time) string {
+	// Ranges that do not land on a whole minute, such as an odd --minutes span
+	// centred on --around, keep their seconds so the name matches the contents.
+	fromLayout, toLayout := "2006-01-02_1504", "1504"
+	if from.Second() != 0 || to.Second() != 0 {
+		fromLayout, toLayout = "2006-01-02_150405", "150405"
+	}
 	return fmt.Sprintf("%s_%s-%s.mp4",
 		slug(alias),
-		from.Format("2006-01-02_1504"),
-		to.Format("1504"),
+		from.Format(fromLayout),
+		to.Format(toLayout),
 	)
 }
 

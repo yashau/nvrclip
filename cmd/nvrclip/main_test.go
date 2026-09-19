@@ -4,6 +4,8 @@ import (
 	"flag"
 	"testing"
 	"time"
+
+	"github.com/yashau/nvrclip/internal/config"
 )
 
 func TestResolveModeFlagUsesFormatAlias(t *testing.T) {
@@ -55,5 +57,32 @@ func TestResolveModeFlagRejectsConflict(t *testing.T) {
 	}
 	if _, err := resolveModeFlag(fs, *mode, *format); err == nil {
 		t.Fatal("expected conflicting mode and format to fail")
+	}
+}
+
+func TestResolveTimeOffset(t *testing.T) {
+	off := false
+	on := true
+
+	tests := []struct {
+		name         string
+		noTimeOffset bool
+		configured   *bool
+		want         bool
+	}{
+		{name: "on when nothing is configured", want: true},
+		{name: "on when the config asks for it", configured: &on, want: true},
+		{name: "off when the config opts out", configured: &off, want: false},
+		{name: "off when the flag opts out", noTimeOffset: true, want: false},
+		{name: "flag beats a config that asks for it", noTimeOffset: true, configured: &on, want: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := resolveTimeOffset(test.noTimeOffset, config.NVR{AutoTimeOffset: test.configured})
+			if got != test.want {
+				t.Fatalf("resolveTimeOffset = %v, want %v", got, test.want)
+			}
+		})
 	}
 }
