@@ -227,6 +227,21 @@ Download only, without producing a final MP4:
 .\nvrclip.exe download shop --channel 1 --around "2026-05-05 14:05" --minutes 10 --download-only --keep-temp
 ```
 
+### Long exports
+
+One command exports one clip. For a range spanning days, `bulk-export.ps1` splits
+the job into chunks and runs them in sequence, so a failure costs one chunk
+rather than the whole export:
+
+```powershell
+.\bulk-export.ps1 -Nvr shop -Channel 1 -StartDate "2026-05-01" -EndDate "2026-05-05" `
+  -DailyFrom "08:00" -DailyTo "19:00" -ChunkMinutes 180 -OutRoot "D:\export" -Detach
+```
+
+Output is foldered by day. Re-running skips chunks already on disk, so an
+interrupted export resumes where it stopped. `-Detach` runs it as an independent
+background process, writing a console log and a CSV of per-chunk results.
+
 ## How It Works
 
 Dahua:
