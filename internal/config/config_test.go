@@ -35,8 +35,40 @@ auto_time_offset = true
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.NVRs["office"].AutoTimeOffset {
+	if !cfg.NVRs["office"].TimeOffsetEnabled() {
 		t.Fatal("auto_time_offset was not loaded")
+	}
+}
+
+// Recorder clocks drift, and an unchecked drift silently returns footage from
+// the wrong time, so the correction applies unless a config opts out of it.
+func TestTimeOffsetEnabledDefaultsOn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nvrclip.toml")
+	content := `[office]
+type = "dahua"
+base_url = "192.0.2.1"
+username = "admin"
+password = "test"
+
+[warehouse]
+type = "dahua"
+base_url = "192.0.2.2"
+username = "admin"
+password = "test"
+auto_time_offset = false
+`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.NVRs["office"].TimeOffsetEnabled() {
+		t.Fatal("time offset should be on when the config says nothing")
+	}
+	if cfg.NVRs["warehouse"].TimeOffsetEnabled() {
+		t.Fatal("auto_time_offset = false should turn the correction off")
 	}
 }
 

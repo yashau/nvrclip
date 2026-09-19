@@ -64,7 +64,6 @@ type = "dahua"
 base_url = "172.20.32.8"
 username = "admin"
 password_env = "NVRCLIP_SHOP_PASSWORD"
-auto_time_offset = true
 frame_rate = 25
 timeout = "5m"
 
@@ -77,7 +76,6 @@ type = "hikvision"
 base_url = "10.10.37.5"
 username = "admin"
 password_env = "NVRCLIP_WAREHOUSE_PASSWORD"
-auto_time_offset = true
 insecure_tls = true
 frame_rate = 25
 timeout = "30m"
@@ -105,24 +103,24 @@ Set env vars in PowerShell:
 $env:NVRCLIP_SHOP_PASSWORD = "your-password"
 ```
 
-### Automatic NVR clock offset
+### NVR clock correction
 
-If the PC clock is accurate but the NVR clock may drift, enable automatic time
-offset correction in the NVR config:
+Recorder clocks drift, and some sit hours out however carefully their timezone
+and NTP are set. nvrclip treats the PC clock as the reference and corrects for
+the recorder's error on every command. Nothing needs configuring; it is on by
+default.
+
+To send request times to the recorder unchanged, opt out per command:
+
+```powershell
+.\nvrclip.exe download shop --channel 1 --from "2026-05-05 14:00" --to "2026-05-05 14:10" --no-time-offset
+```
+
+Or for one NVR, in its config:
 
 ```toml
 [shop]
-type = "dahua"
-base_url = "172.20.32.8"
-username = "admin"
-password_env = "NVRCLIP_SHOP_PASSWORD"
-auto_time_offset = true
-```
-
-You can also enable it for one command:
-
-```powershell
-.\nvrclip.exe download shop --channel 1 --from "2026-05-05 14:00" --to "2026-05-05 14:10" --auto-time-offset
+auto_time_offset = false
 ```
 
 At the start of the command, nvrclip reads the NVR wall clock and compares it
@@ -135,8 +133,16 @@ the NVR as `13:00`. Segment timestamps are translated back before trimming, and
 the output filename still uses the requested `14:00` time.
 
 This feature does not change the NVR clock. It assumes the PC and NVR are meant
-to use the same local wall-clock time. If nvrclip cannot read the NVR time, the
-command fails instead of silently downloading an unadjusted clip.
+to use the same local wall-clock time, and that the error measured now is the
+error the recorder had when it recorded. That holds for a clock which is simply
+set wrong, but not across an event that moved it, such as a long power-off. If
+nvrclip cannot read the NVR time, the command fails instead of silently
+downloading an unadjusted clip.
+
+Clock correction only decides *which* recording to fetch. Trimming inside that
+recording runs off the timestamps stored in the file, and never compares them
+with the recorder's clock, so a recorder that is an hour out trims exactly as
+accurately as one that is correct.
 
 ## Usage
 
@@ -228,6 +234,7 @@ Dahua:
 - Searches recording segments through raw CGI.
 - Prefers the indexed recording file so the stored codec and resolution are preserved.
 - Detects and removes stale indexed-file preambles at timestamp discontinuities, starting from the first valid keyframe.
+- Trims against the timestamps stored in the recording, so pauses and dropped frames do not shift the cut.
 - Falls back to a bounded CGI export on firmware that does not expose indexed files.
 - Trims/remuxes with FFmpeg.
 

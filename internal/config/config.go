@@ -22,11 +22,18 @@ type NVR struct {
 	Password       string             `toml:"password"`
 	PasswordEnv    string             `toml:"password_env"`
 	InsecureTLS    bool               `toml:"insecure_tls"`
-	AutoTimeOffset bool               `toml:"auto_time_offset"`
+	AutoTimeOffset *bool              `toml:"auto_time_offset"`
 	Timeout        string             `toml:"timeout"`
 	FrameRate      float64            `toml:"frame_rate"`
 	Channels       map[string]string  `toml:"channels"`
 	Options        map[string]unknown `toml:"-"`
+}
+
+// TimeOffsetEnabled reports whether request times should be translated through
+// the recorder's own clock. Recorder clocks drift, and a drifting clock silently
+// yields the wrong footage, so the correction is on unless a config turns it off.
+func (n NVR) TimeOffsetEnabled() bool {
+	return n.AutoTimeOffset == nil || *n.AutoTimeOffset
 }
 
 type unknown struct{}

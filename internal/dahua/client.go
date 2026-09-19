@@ -185,10 +185,17 @@ func (c *Client) downloadIndexedFile(ctx context.Context, baseURL string, req nv
 	if err := c.downloadURL(ctx, downloadURL, req.Path, req.Progress, "indexed"); err != nil {
 		return nvr.DownloadResult{}, err
 	}
+	// Indexed files carry a timestamp on every packet, so the trim seeks through
+	// those rather than a timeline synthesised from a constant frame rate.
+	// Rebuilding the timeline collapses recording gaps, which pushes every seek
+	// past the requested moment by however much recording time went missing.
+	// What the timestamps read is irrelevant and never compared with any
+	// recorder clock; only their spacing is used.
 	return nvr.DownloadResult{
 		From:                 req.Segment.Start,
 		To:                   req.Segment.End,
-		ForceFrameRate:       true,
+		SeekByMediaTimeline:  true,
+		ForceFrameRate:       false,
 		DiscardStalePreamble: true,
 	}, nil
 }

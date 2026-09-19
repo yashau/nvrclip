@@ -25,8 +25,12 @@ type DownloadRequest struct {
 }
 
 type DownloadResult struct {
-	From                 time.Time
-	To                   time.Time
+	From time.Time
+	To   time.Time
+	// SeekByMediaTimeline marks a download whose file carries its own usable
+	// timestamps, so the trim seeks through those rather than rebuilding a
+	// timeline from a configured frame rate.
+	SeekByMediaTimeline  bool
 	ForceFrameRate       bool
 	DiscardStalePreamble bool
 }
