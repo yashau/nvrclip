@@ -238,9 +238,18 @@ rather than the whole export:
   -DailyFrom "08:00" -DailyTo "19:00" -ChunkMinutes 180 -OutRoot "D:\export" -Detach
 ```
 
-Output is foldered by day. Re-running skips chunks already on disk, so an
-interrupted export resumes where it stopped. `-Detach` runs it as an independent
-background process, writing a console log and a CSV of per-chunk results.
+A range that runs through the night is a continuous span rather than a daily
+window, so give it `-From` and `-To` instead:
+
+```powershell
+.\bulk-export.ps1 -Nvr shop -Channel 1 -From "2026-05-01 19:00" -To "2026-05-03 08:00" `
+  -ChunkMinutes 180 -OutRoot "D:\export" -Detach
+```
+
+Output is foldered by the day each chunk starts on. Re-running skips chunks
+already on disk, so an interrupted export resumes where it stopped. `-Detach`
+runs it as an independent background process, writing a console log and a CSV of
+per-chunk results.
 
 ## How It Works
 
