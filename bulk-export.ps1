@@ -24,10 +24,12 @@
 param(
     [Parameter(Mandatory)][string]$Nvr,
     [Parameter(Mandatory)][string]$Channel,
-    [Parameter(Mandatory)][datetime]$StartDate,
-    [Parameter(Mandatory)][datetime]$EndDate,
+    [datetime]$StartDate,
+    [datetime]$EndDate,
     [string]$DailyFrom = '00:00',
     [string]$DailyTo = '24:00',
+    [datetime]$From,
+    [datetime]$To,
     [int]$ChunkMinutes = 180,
     [string]$OutRoot = '.\export',
     [ValidateSet('copy', 'exact')][string]$Mode = 'copy',
@@ -45,7 +47,18 @@ $exe = Join-Path $PSScriptRoot 'nvrclip.exe'
 if (-not (Test-Path $exe)) {
     throw "nvrclip.exe not found at $exe. Build it with: go run ./tools/build --version 0.2.2"
 }
-if ($EndDate.Date -lt $StartDate.Date) { throw "-EndDate must not be earlier than -StartDate." }
+$continuous = $PSBoundParameters.ContainsKey('From') -or $PSBoundParameters.ContainsKey('To')
+if ($continuous) {
+    if (-not ($PSBoundParameters.ContainsKey('From') -and $PSBoundParameters.ContainsKey('To'))) {
+        throw "-From and -To must be given together."
+    }
+    if ($To -le $From) { throw "-To must be later than -From." }
+} else {
+    if (-not $StartDate -or -not $EndDate) {
+        throw "Give either -From and -To, or -StartDate and -EndDate."
+    }
+    if ($EndDate.Date -lt $StartDate.Date) { throw "-EndDate must not be earlier than -StartDate." }
+}
 if ($ChunkMinutes -le 0) { throw "-ChunkMinutes must be positive." }
 
 # "24:00" is not a valid TimeSpan; treat it as the end of the day.
@@ -74,14 +87,20 @@ if ($Detach) {
     $childArgs = @(
         '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $PSCommandPath,
         '-Nvr', $Nvr, '-Channel', $Channel,
-        '-StartDate', $StartDate.ToString('yyyy-MM-dd'),
-        '-EndDate', $EndDate.ToString('yyyy-MM-dd'),
-        '-DailyFrom', $DailyFrom, '-DailyTo', $DailyTo,
         '-ChunkMinutes', $ChunkMinutes,
         '-OutRoot', $OutRoot, '-Mode', $Mode,
         '-Config', (Resolve-Path $Config).Path,
         '-Retries', $Retries
     )
+    if ($continuous) {
+        $childArgs += @('-From', $From.ToString('yyyy-MM-dd HH:mm:ss'), '-To', $To.ToString('yyyy-MM-dd HH:mm:ss'))
+    } else {
+        $childArgs += @(
+            '-StartDate', $StartDate.ToString('yyyy-MM-dd'),
+            '-EndDate', $EndDate.ToString('yyyy-MM-dd'),
+            '-DailyFrom', $DailyFrom, '-DailyTo', $DailyTo
+        )
+    }
     if ($AutoTimeOffset) { $childArgs += '-AutoTimeOffset' }
     if ($WorkDir) { $childArgs += @('-WorkDir', $WorkDir) }
 
@@ -118,15 +137,27 @@ $label = if ($Channel -match '^\d+$') { "$Nvr channel $Channel" } else { "$Nvr $
 $slug = ConvertTo-Slug $label
 
 $chunks = @()
-for ($day = $StartDate.Date; $day -le $EndDate.Date; $day = $day.AddDays(1)) {
-    $windowStart = $day.Add($fromOffset)
-    $windowEnd = $day.Add($toOffset)
-    $cursor = $windowStart
-    while ($cursor -lt $windowEnd) {
+if ($continuous) {
+    # One unbroken span. Chunks are foldered by the day they start on, so a run
+    # crossing midnight files each chunk under the date it belongs to.
+    $cursor = $From
+    while ($cursor -lt $To) {
         $stop = $cursor.AddMinutes($ChunkMinutes)
-        if ($stop -gt $windowEnd) { $stop = $windowEnd }
-        $chunks += [pscustomobject]@{ Day = $day; From = $cursor; To = $stop }
+        if ($stop -gt $To) { $stop = $To }
+        $chunks += [pscustomobject]@{ Day = $cursor.Date; From = $cursor; To = $stop }
         $cursor = $stop
+    }
+} else {
+    for ($day = $StartDate.Date; $day -le $EndDate.Date; $day = $day.AddDays(1)) {
+        $windowStart = $day.Add($fromOffset)
+        $windowEnd = $day.Add($toOffset)
+        $cursor = $windowStart
+        while ($cursor -lt $windowEnd) {
+            $stop = $cursor.AddMinutes($ChunkMinutes)
+            if ($stop -gt $windowEnd) { $stop = $windowEnd }
+            $chunks += [pscustomobject]@{ Day = $day; From = $cursor; To = $stop }
+            $cursor = $stop
+        }
     }
 }
 
@@ -135,8 +166,12 @@ $logPath = Join-Path $OutRoot ("bulk-export_{0:yyyyMMdd_HHmmss}.csv" -f (Get-Dat
 
 Write-Host "nvrclip bulk export"
 Write-Host "  nvr/channel : $Nvr / $Channel  (label '$label')"
-Write-Host "  dates       : $($StartDate.ToString('yyyy-MM-dd')) .. $($EndDate.ToString('yyyy-MM-dd')) inclusive"
-Write-Host "  daily window: $DailyFrom - $DailyTo"
+if ($continuous) {
+    Write-Host "  range       : $($From.ToString('yyyy-MM-dd HH:mm')) -> $($To.ToString('yyyy-MM-dd HH:mm'))"
+} else {
+    Write-Host "  dates       : $($StartDate.ToString('yyyy-MM-dd')) .. $($EndDate.ToString('yyyy-MM-dd')) inclusive"
+    Write-Host "  daily window: $DailyFrom - $DailyTo"
+}
 Write-Host "  chunks      : $($chunks.Count) x up to $ChunkMinutes min, mode=$Mode"
 Write-Host "  output      : $OutRoot"
 Write-Host "  csv log     : $logPath"
